@@ -10,7 +10,7 @@ vcpkg ports for the third-party libraries of OGSR Engine (forks and custom build
 | `ogsr-ode` | 2026-10-01 | https://github.com/joye-ramone/ode_xray (`xray_v2`) |
 | `ogsr-libsquashfs` | 2024-03-24 | https://github.com/AgentD/squashfs-tools-ng (`master`) |
 | `ogsr-directxtex` | 2026-08-28 | https://github.com/solbjorn/DirectXTex (`master`) |
-| `ogsr-nvidia-dlss` | 310.9.1 | https://github.com/NVIDIA/DLSS (`v310.9.1`) |
+| `ogsr-nvidia-dlss` | 310.9.1#1 | https://github.com/NVIDIA/DLSS (`v310.9.1`) |
 | `ogsr-fidelityfx-fsr3` | 2026-10-04 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.2-DX11-Native-API`) |
 
 Each port is pinned to one commit of its source; the exact commit is `REF` in `ports/<package>/portfile.cmake`.
