@@ -4,6 +4,10 @@
       "baseline": "2026-08-28",
       "port-version": 0
     },
+    "ogsr-fidelityfx-fsr3": {
+      "baseline": "2026-10-04",
+      "port-version": 0
+    },
     "ogsr-libsquashfs": {
       "baseline": "2024-03-24",
       "port-version": 0
