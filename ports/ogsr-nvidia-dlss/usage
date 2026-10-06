@@ -1,0 +1,3 @@
+ogsr-nvidia-dlss: #include <nvsdk_ngx.h> / <nvsdk_ngx_helpers.h>; nvsdk_ngx_s.lib (Debug: nvsdk_ngx_s_dbg_iterator0.lib) is auto-linked.
+Copy the DLSS runtime next to the exe: $(VcpkgInstalledDir)$(VcpkgTriplet)\bin\nvngx_dlss.dll (Release),
+$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\nvngx_dlss.dll (Debug, development build with the debug overlay).
