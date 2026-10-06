@@ -1,0 +1,7 @@
+ogsr-fidelityfx-fsr3 provides CMake targets:
+
+    find_package(ogsr-fidelityfx-fsr3 CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE ogsr::ffx::fsr3upscaler ogsr::ffx::backend_dx11)
+
+MSBuild (vcpkg manifest mode): define FFX_GCC (static FFX_API); #include <FidelityFX/host/ffx_fsr3.h>, <FidelityFX/host/backends/dx11/ffx_dx11.h>;
+ffx_fsr3upscaler_x64.lib and ffx_backend_dx11_x64.lib are auto-linked.
