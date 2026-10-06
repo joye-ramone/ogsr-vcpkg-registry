@@ -2,6 +2,8 @@
 
 vcpkg ports for the third-party libraries of OGSR Engine (forks and custom builds). All are static, Windows x64 only.
 
+Updating a package or adding a new one: `AGENTS.md`.
+
 ## Packages
 
 | Package | Version | Source |
