@@ -1,0 +1,6 @@
+ogsr-directxtex provides CMake targets (same names as the upstream directxtex port):
+
+    find_package(directxtex CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE Microsoft::DirectXTex)
+
+MSBuild (vcpkg manifest mode): #include <DirectXTex.h>; DirectXTex.lib is auto-linked.
