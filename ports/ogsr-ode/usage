@@ -1,0 +1,6 @@
+ogsr-ode provides CMake targets:
+
+    find_package(ogsr-ode CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE ogsr::ode)
+
+MSBuild (vcpkg manifest mode): define dSINGLE and MSVC; public headers are <ode/ode.h>, internal ones "ode/src/joint.h"; ode.lib is auto-linked.

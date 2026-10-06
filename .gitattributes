@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# batch files keep CRLF in the repo: cmd.exe mis-parses labels in LF files, and vcpkg extracts port trees as stored
+*.bat -text

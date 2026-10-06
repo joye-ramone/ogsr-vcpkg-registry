@@ -1,0 +1,58 @@
+# OGSR vcpkg registry
+
+A [vcpkg git registry](https://learn.microsoft.com/vcpkg/maintainers/registries) with the third-party libraries that OGSR Engine uses in forked or customized form. Ports are named `ogsr-*` so they never shadow ports of the main vcpkg registry.
+
+| Port | Source | Notes |
+|---|---|---|
+| `ogsr-luajit` | [joye-ramone/luajit2](https://github.com/joye-ramone/luajit2), branch `xray` | Static `LuaJIT.lib`, built with the port's copy of the engine's `msvcbuild.bat` (AVX2, `/fp:fast`, `/GL` in Release). Headers go straight into `include\` (`#include <lua.hpp>`). |
+| `ogsr-ode` | [joye-ramone/ode_xray](https://github.com/joye-ramone/ode_xray), branch `xray_v2` | Static `ode.lib` (`dSINGLE`), built with the port's `CMakeLists.txt` (same sources and flags as the engine's former `default.vcxproj`). Also installs the internal headers as `include\ode\src\*.h`. |
+
+Both are static only and Windows x64 only (the engine's `x64-windows-static` / `x64-windows-static-asan` triplets). Release objects are built with `/GL`, so they link only with the same MSVC version; vcpkg builds ports with the consumer's toolset, so this holds for manifest-mode builds.
+
+## Using it
+
+In the consumer's `vcpkg-configuration.json`, add the registry with the commit to use as its baseline:
+
+```json
+{
+  "registries": [
+    {
+      "kind": "git",
+      "repository": "https://github.com/<owner>/ogsr-vcpkg-registry",
+      "baseline": "<commit sha of this repo>",
+      "packages": [ "ogsr-*" ]
+    }
+  ]
+}
+```
+
+and list the ports in `vcpkg.json` (`"dependencies": [ "ogsr-luajit", "ogsr-ode" ]`). A private repository works as long as `git` can fetch it without a prompt (Git Credential Manager, SSH URL).
+
+## Layout
+
+```
+ports/<port>/            vcpkg.json, portfile.cmake and files the portfile copies
+versions/baseline.json   latest version of every port
+versions/o-/<port>.json  every published version of the port -> git tree of ports/<port>
+```
+
+vcpkg resolves a port version through `versions/`, and fetches `ports/<port>` from the git tree recorded there, so a version is fixed once it's committed: change a port only together with a new version (or `port-version`) entry.
+
+## Updating a port
+
+1. Edit `ports/<port>`. For a new upstream commit: set `REF` in `portfile.cmake` to the commit SHA, set `SHA512` to `0` and run an install once: vcpkg fails and prints the real hash. Set `version-date` in `vcpkg.json` to the commit date. For a change in the port only (flags, install layout), increase `port-version` instead.
+2. Test it without committing, as an overlay port, from a scratch folder with a `vcpkg.json` that depends on the port:
+   ```
+   vcpkg install --overlay-ports=<this repo>\ports --overlay-triplets=<engine>\ogsr-triplets --triplet x64-windows-static
+   ```
+3. Commit the port, then record the version (it reads the committed git tree, so the port must be committed first) and commit again:
+   ```
+   vcpkg x-add-version --all --x-builtin-ports-root=.\ports --x-builtin-registry-versions-dir=.\versions
+   git commit -am "versions: <port> <version>"
+   ```
+   `vcpkg` is the one bundled with Visual Studio (`<VS>\VC\vcpkg\vcpkg.exe`) or a standalone one. `x-add-version` refuses to change an existing version's git tree; bump the version rather than passing `--overwrite-version` once the commit is pushed.
+4. Push, then move the consumer's `baseline` to the new commit.
+
+## Adding a port
+
+Create `ports/ogsr-<name>/` with `vcpkg.json` and `portfile.cmake` (fetch sources with `vcpkg_from_github` pinned to a commit, never a branch), test it as an overlay, then follow steps 3-4 above. `x-add-version` adds the port to `versions/baseline.json`.

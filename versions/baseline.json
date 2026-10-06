@@ -1,0 +1,12 @@
+{
+  "default": {
+    "ogsr-luajit": {
+      "baseline": "2026-09-30",
+      "port-version": 0
+    },
+    "ogsr-ode": {
+      "baseline": "2026-10-01",
+      "port-version": 0
+    }
+  }
+}

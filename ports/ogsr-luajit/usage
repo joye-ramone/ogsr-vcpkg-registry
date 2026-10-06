@@ -1,0 +1,6 @@
+ogsr-luajit provides CMake targets:
+
+    find_package(ogsr-luajit CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE ogsr::luajit)
+
+MSBuild (vcpkg manifest mode): headers are in include\ (#include <lua.hpp>), LuaJIT.lib is auto-linked.
