@@ -1,5 +1,9 @@
 {
   "default": {
+    "ogsr-directxtex": {
+      "baseline": "2026-08-28",
+      "port-version": 0
+    },
     "ogsr-libsquashfs": {
       "baseline": "2024-03-24",
       "port-version": 0
