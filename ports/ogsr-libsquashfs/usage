@@ -1,0 +1,6 @@
+ogsr-libsquashfs provides CMake targets:
+
+    find_package(ogsr-libsquashfs CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE ogsr::libsquashfs)
+
+MSBuild (vcpkg manifest mode): #include <sqfs/super.h> etc.; squashfs.lib (plus lz4 and zstd) is auto-linked.

@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(lz4 CONFIG)
+find_dependency(zstd CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/ogsr-libsquashfs-targets.cmake")

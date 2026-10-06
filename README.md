@@ -7,7 +7,9 @@ A [vcpkg git registry](https://learn.microsoft.com/vcpkg/maintainers/registries)
 | `ogsr-luajit` | [joye-ramone/luajit2](https://github.com/joye-ramone/luajit2), branch `xray` | Static `LuaJIT.lib`, built with the port's copy of the engine's `msvcbuild.bat` (AVX2, `/fp:fast`, `/GL` in Release). Headers go straight into `include\` (`#include <lua.hpp>`). |
 | `ogsr-ode` | [joye-ramone/ode_xray](https://github.com/joye-ramone/ode_xray), branch `xray_v2` | Static `ode.lib` (`dSINGLE`), built with the port's `CMakeLists.txt` (same sources and flags as the engine's former `default.vcxproj`). Also installs the internal headers as `include\ode\src\*.h`. |
 
-Both are static only and Windows x64 only (the engine's `x64-windows-static` / `x64-windows-static-asan` triplets). Release objects are built with `/GL`, so they link only with the same MSVC version; vcpkg builds ports with the consumer's toolset, so this holds for manifest-mode builds.
+| `ogsr-libsquashfs` | [AgentD/squashfs-tools-ng](https://github.com/AgentD/squashfs-tools-ng), `master` (after 1.3.2) | Static `squashfs.lib`, only the library (`lib/sqfs`, `lib/util`, `lib/compat`) with the lz4 and zstd compressors (vcpkg's `lz4`, `zstd`). Upstream has autotools only: the port's `CMakeLists.txt` and pre-generated `inc\config.h` follow the engine's former `libsquashfs.vcxproj`. The installed `sqfs/predef.h` is patched to the static API, so consumers don't need `SQFS_STATIC`. |
+
+All ports are static only and Windows x64 only (the engine's `x64-windows-static` / `x64-windows-static-asan` triplets). Release objects are built with `/GL`, so they link only with the same MSVC version; vcpkg builds ports with the consumer's toolset, so this holds for manifest-mode builds.
 
 ## Using it
 
