@@ -1,0 +1,51 @@
+diff --git a/public/client/TracyProfiler.cpp b/public/client/TracyProfiler.cpp
+--- a/public/client/TracyProfiler.cpp
++++ b/public/client/TracyProfiler.cpp
+@@ -1179,7 +1179,7 @@ static void StartSystemTracing( int64_t& samplingPeriod )
+         s_sysTraceStartFailed.store( false, std::memory_order_release );
+         Thread* sysTraceThread = (Thread*)tracy_malloc( sizeof( Thread ) );
+         new( sysTraceThread ) Thread( SysTraceWorker, nullptr );
+-        Thread* prev = s_sysTraceThread.exchange( sysTraceThread );
++        [[maybe_unused]] Thread* prev = s_sysTraceThread.exchange( sysTraceThread );
+         TRACY_ASSERT( prev == nullptr );
+         std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+     }
+@@ -4220,7 +4220,7 @@ void Profiler::ReportTopology()
+     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
+     {
+         packageInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( psz );
+-        auto res = _GetLogicalProcessorInformationEx( RelationProcessorPackage, packageInfo, &psz );
++        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorPackage, packageInfo, &psz );
+         TRACY_ASSERT( res );
+     }
+     else
+@@ -4233,7 +4233,7 @@ void Profiler::ReportTopology()
+     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
+     {
+         dieInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( dsz );
+-        auto res = _GetLogicalProcessorInformationEx( RelationProcessorDie, dieInfo, &dsz );
++        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorDie, dieInfo, &dsz );
+         TRACY_ASSERT( res );
+     }
+     else
+@@ -4246,7 +4246,7 @@ void Profiler::ReportTopology()
+     if( GetLastError() == ERROR_INSUFFICIENT_BUFFER )
+     {
+         coreInfo = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)tracy_malloc( csz );
+-        auto res = _GetLogicalProcessorInformationEx( RelationProcessorCore, coreInfo, &csz );
++        [[maybe_unused]] auto res = _GetLogicalProcessorInformationEx( RelationProcessorCore, coreInfo, &csz );
+         TRACY_ASSERT( res );
+     }
+     else
+diff --git a/public/client/windows/TracyETW.cpp b/public/client/windows/TracyETW.cpp
+--- a/public/client/windows/TracyETW.cpp
++++ b/public/client/windows/TracyETW.cpp
+@@ -191,7 +191,7 @@ static DWORD ElevatePrivilege( LPCTSTR PrivilegeName )
+     HANDLE hToken = {};
+     if( OpenProcessToken( GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &hToken ) == FALSE )
+         return ETWError( GetLastError() );
+-    BOOL adjusted = AdjustTokenPrivileges( hToken, FALSE, &tp, 0, nullptr, nullptr );
++    [[maybe_unused]] BOOL adjusted = AdjustTokenPrivileges( hToken, FALSE, &tp, 0, nullptr, nullptr );
+     DWORD status = GetLastError();
+     CloseHandle( hToken );    // NOTE: skipping error handling for CloseHandle()
+     return ETWError( status );

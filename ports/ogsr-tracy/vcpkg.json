@@ -1,0 +1,8 @@
+{
+  "name": "ogsr-tracy",
+  "version-date": "2026-09-15",
+  "description": "Tracy profiler client sources (wolfpld/tracy master after v0.14.1, protocol 82) as used by OGSR Engine: the public/ tree only, nothing built. The consumer compiles TracyClient.cpp itself, with its own TRACY_* defines.",
+  "homepage": "https://github.com/wolfpld/tracy",
+  "license": "BSD-3-Clause",
+  "supports": "windows & x64"
+}

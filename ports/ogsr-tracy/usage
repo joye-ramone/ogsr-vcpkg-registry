@@ -1,0 +1,9 @@
+ogsr-tracy installs the Tracy client sources only (nothing is linked):
+
+    MSBuild: add $(SolutionDir)vcpkg_installed\$(VcpkgTriplet)\include\ogsr-tracy to the include path (#include <tracy/Tracy.hpp>)
+             and compile ...\include\ogsr-tracy\TracyClient.cpp in one project (no precompiled header).
+    CMake:   find_package(ogsr-tracy CONFIG REQUIRED)
+             target_link_libraries(main PRIVATE ogsr::tracy)
+             target_sources(main PRIVATE ${OGSR_TRACY_CLIENT_SOURCE})
+
+Define TRACY_ENABLE (and TRACY_ON_DEMAND etc.) only in the profiling build; without it every Tracy macro is empty.
