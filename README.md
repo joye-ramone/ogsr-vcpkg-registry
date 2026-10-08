@@ -8,7 +8,7 @@ Updating a package or adding a new one: `AGENTS.md`.
 
 | Package | Version | Source |
 |---|---|---|
-| `ogsr-luajit` | 2026-09-30 | https://github.com/joye-ramone/luajit2 (`xray`) |
+| `ogsr-luajit` | 2026-10-08 | https://github.com/joye-ramone/luajit2 (`xray`) |
 | `ogsr-ode` | 2026-10-01 | https://github.com/joye-ramone/ode_xray (`xray_v2`) |
 | `ogsr-libsquashfs` | 2024-03-24 | https://github.com/AgentD/squashfs-tools-ng (`master`) |
 | `ogsr-directxtex` | 2026-08-28 | https://github.com/solbjorn/DirectXTex (`master`) |
