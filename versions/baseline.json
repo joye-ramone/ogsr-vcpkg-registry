@@ -14,7 +14,7 @@
     },
     "ogsr-luajit": {
       "baseline": "2026-10-08",
-      "port-version": 0
+      "port-version": 1
     },
     "ogsr-nvidia-dlss": {
       "baseline": "310.9.1",
