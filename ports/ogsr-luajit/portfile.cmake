@@ -7,8 +7,8 @@ vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO joye-ramone/luajit2
-    REF 584d1c235809cf41b4d942b520c88f3d6cb9bdcf
-    SHA512 21704e7fd96eeacefd8ee5211ac5979b9834e0f2d36a27b0727576809770aa8c6a7abc5e55858fe9438595e6d0bc3088b84fe3d8a014f477dc44c35de6322c17
+    REF 09a86ec4b50dbbe468e726a8eee26ee5a64889b8
+    SHA512 fa569095c1f5cc159fbddbcc2d697fcf45cb7b5a02dd7ca3a552e96422dfcfce5aa6c61343caad708d20d84b04e6237e99cacdbd7e22e64b4dcf59665dc307a4
     HEAD_REF xray
 )
 
