@@ -1,0 +1,89 @@
+diff --git a/include/nvrhi/nvrhi.h b/include/nvrhi/nvrhi.h
+index 7b920b0..2b21d2d 100644
+--- a/include/nvrhi/nvrhi.h
++++ b/include/nvrhi/nvrhi.h
+@@ -234,6 +234,8 @@ namespace nvrhi
+         BC7_UNORM,
+         BC7_UNORM_SRGB,
+ 
++        A8_UNORM, // D3D11 / D3D12 only (Vulkan: VK_FORMAT_UNDEFINED)
++
+         COUNT,
+     };
+     
+diff --git a/src/common/dxgi-format.cpp b/src/common/dxgi-format.cpp
+index f7f604f..3f1fcc0 100644
+--- a/src/common/dxgi-format.cpp
++++ b/src/common/dxgi-format.cpp
+@@ -99,6 +99,7 @@ namespace nvrhi
+         { Format::BC6H_SFLOAT,          DXGI_FORMAT_BC6H_TYPELESS,          DXGI_FORMAT_BC6H_SF16,                DXGI_FORMAT_BC6H_SF16              },
+         { Format::BC7_UNORM,            DXGI_FORMAT_BC7_TYPELESS,           DXGI_FORMAT_BC7_UNORM,                DXGI_FORMAT_BC7_UNORM              },
+         { Format::BC7_UNORM_SRGB,       DXGI_FORMAT_BC7_TYPELESS,           DXGI_FORMAT_BC7_UNORM_SRGB,           DXGI_FORMAT_BC7_UNORM_SRGB         },
++        { Format::A8_UNORM,             DXGI_FORMAT_A8_UNORM,               DXGI_FORMAT_A8_UNORM,                 DXGI_FORMAT_A8_UNORM               },
+     };
+ 
+     const DxgiFormatMapping& getDxgiFormatMapping(Format abstractFormat)
+diff --git a/src/common/format-info.cpp b/src/common/format-info.cpp
+index d38d2b7..271de29 100644
+--- a/src/common/format-info.cpp
++++ b/src/common/format-info.cpp
+@@ -97,6 +97,7 @@ namespace nvrhi
+         { Format::BC6H_SFLOAT,       "BC6H_SFLOAT",       16,  4, FormatKind::Float,        true,  true,  true,  false, false, false, true,  false },
+         { Format::BC7_UNORM,         "BC7_UNORM",         16,  4, FormatKind::Normalized,   true,  true,  true,  true,  false, false, false, false },
+         { Format::BC7_UNORM_SRGB,    "BC7_UNORM_SRGB",    16,  4, FormatKind::Normalized,   true,  true,  true,  true,  false, false, false, true  },
++        { Format::A8_UNORM,          "A8_UNORM",          1,   1, FormatKind::Normalized,   false, false, false, true,  false, false, false, false },
+     };
+ 
+     const FormatInfo& getFormatInfo(Format format)
+diff --git a/src/d3d11/d3d11-texture.cpp b/src/d3d11/d3d11-texture.cpp
+index 5ce1214..a488df0 100644
+--- a/src/d3d11/d3d11-texture.cpp
++++ b/src/d3d11/d3d11-texture.cpp
+@@ -681,7 +681,15 @@ namespace nvrhi::d3d11
+             format = desc.format;
+         }
+ 
++        const TextureSubresourceSet requested = subresources;
+         subresources = subresources.resolve(desc, true);
++        if (desc.dimension == TextureDimension::Texture3D)
++        {
++            // a 3D target's array slices are its W slices (resolve keeps one)
++            const ArraySlice depth = std::max(desc.depth >> subresources.baseMipLevel, 1u);
++            subresources.baseArraySlice = std::min(requested.baseArraySlice, depth - 1);
++            subresources.numArraySlices = std::min(requested.numArraySlices, depth - subresources.baseArraySlice);
++        }
+ 
+         std::lock_guard lock(m_ViewMutex);
+         RefCountPtr<ID3D11RenderTargetView>& rtvPtr = m_RenderTargetViews[TextureBindingKey(subresources, format)];
+diff --git a/src/d3d12/d3d12-texture.cpp b/src/d3d12/d3d12-texture.cpp
+index d9ae56e..63b595c 100644
+--- a/src/d3d12/d3d12-texture.cpp
++++ b/src/d3d12/d3d12-texture.cpp
+@@ -785,7 +785,15 @@ namespace nvrhi::d3d12
+ 
+     void Texture::createRTV(size_t descriptor, Format format, TextureSubresourceSet subresources) const
+     {
++        const TextureSubresourceSet requested = subresources;
+         subresources = subresources.resolve(desc, true);
++        if (desc.dimension == TextureDimension::Texture3D)
++        {
++            // a 3D target's array slices are its W slices (resolve keeps one; state tracking still sees the one subresource of the mip)
++            const ArraySlice depth = std::max(desc.depth >> subresources.baseMipLevel, 1u);
++            subresources.baseArraySlice = std::min(requested.baseArraySlice, depth - 1);
++            subresources.numArraySlices = std::min(requested.numArraySlices, depth - subresources.baseArraySlice);
++        }
+ 
+         D3D12_RENDER_TARGET_VIEW_DESC viewDesc = {};
+ 
+diff --git a/src/vulkan/vulkan-constants.cpp b/src/vulkan/vulkan-constants.cpp
+index 8ab73c6..1bd4ffc 100644
+--- a/src/vulkan/vulkan-constants.cpp
++++ b/src/vulkan/vulkan-constants.cpp
+@@ -107,6 +107,7 @@ namespace nvrhi::vulkan
+         { Format::BC6H_SFLOAT,       VK_FORMAT_BC6H_SFLOAT_BLOCK        },
+         { Format::BC7_UNORM,         VK_FORMAT_BC7_UNORM_BLOCK          },
+         { Format::BC7_UNORM_SRGB,    VK_FORMAT_BC7_SRGB_BLOCK           },
++        { Format::A8_UNORM,          VK_FORMAT_UNDEFINED                },
+ 
+     } };
+ 

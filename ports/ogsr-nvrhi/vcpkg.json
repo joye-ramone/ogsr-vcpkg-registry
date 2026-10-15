@@ -1,0 +1,15 @@
+{
+  "name": "ogsr-nvrhi",
+  "version-date": "2026-10-05",
+  "description": "NVRHI (NVIDIA-RTX/NVRHI main) for OGSR Engine: static libraries nvrhi (with the validation layer), nvrhi_d3d11 and nvrhi_d3d12; no Vulkan, NVAPI, Aftermath or RTXMU; DirectX-Headers from vcpkg; 16 OGSR patches (portfile.cmake): semantic index base, D3D11 deferred command lists and lower binding cost, native shader / layout / pipeline handles, sampler and 3D RTV additions, null bindings, D3D12 view cache lock.",
+  "homepage": "https://github.com/NVIDIA-RTX/NVRHI",
+  "license": "MIT",
+  "supports": "windows & x64 & !uwp & static",
+  "dependencies": [
+    "directx-headers",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+diff --git a/include/nvrhi/nvrhi.h b/include/nvrhi/nvrhi.h
+index fb9d347..cd5b791 100644
+--- a/include/nvrhi/nvrhi.h
++++ b/include/nvrhi/nvrhi.h
+@@ -730,6 +730,8 @@ namespace nvrhi
+         std::string name;
+         Format format = Format::UNKNOWN;
+         uint32_t arraySize = 1;
++        // D3D11 / D3D12: semantic index of the first element; the elements of an array are numbered semanticIndex .. semanticIndex + arraySize - 1
++        uint32_t semanticIndex = 0;
+         uint32_t bufferIndex = 0;
+         uint32_t offset = 0;
+         // note: for most APIs, all strides for a given bufferIndex must be identical
+@@ -739,6 +741,7 @@ namespace nvrhi
+                   VertexAttributeDesc& setName(const std::string& value) { name = value; return *this; }
+         constexpr VertexAttributeDesc& setFormat(Format value) { format = value; return *this; }
+         constexpr VertexAttributeDesc& setArraySize(uint32_t value) { arraySize = value; return *this; }
++        constexpr VertexAttributeDesc& setSemanticIndex(uint32_t value) { semanticIndex = value; return *this; }
+         constexpr VertexAttributeDesc& setBufferIndex(uint32_t value) { bufferIndex = value; return *this; }
+         constexpr VertexAttributeDesc& setOffset(uint32_t value) { offset = value; return *this; }
+         constexpr VertexAttributeDesc& setElementStride(uint32_t value) { elementStride = value; return *this; }
+diff --git a/src/d3d11/d3d11-shader.cpp b/src/d3d11/d3d11-shader.cpp
+index 0eddb0d..4432c0f 100644
+--- a/src/d3d11/d3d11-shader.cpp
++++ b/src/d3d11/d3d11-shader.cpp
+@@ -339,7 +339,7 @@ namespace nvrhi::d3d11
+                 D3D11_INPUT_ELEMENT_DESC desc;
+ 
+                 desc.SemanticName = d[i].name.c_str();
+-                desc.SemanticIndex = semanticIndex;
++                desc.SemanticIndex = d[i].semanticIndex + semanticIndex;
+                 desc.Format = formatMapping.srvFormat;
+                 desc.InputSlot = d[i].bufferIndex;
+                 desc.AlignedByteOffset = d[i].offset + semanticIndex * formatInfo.bytesPerBlock;
+diff --git a/src/d3d12/d3d12-shader.cpp b/src/d3d12/d3d12-shader.cpp
+index 1d1eaca..4c33c0b 100644
+--- a/src/d3d12/d3d12-shader.cpp
++++ b/src/d3d12/d3d12-shader.cpp
+@@ -259,7 +259,7 @@ namespace nvrhi::d3d12
+                 desc.AlignedByteOffset = attr.offset + semanticIndex * formatInfo.bytesPerBlock;
+                 desc.Format = formatMapping.srvFormat;
+                 desc.InputSlot = attr.bufferIndex;
+-                desc.SemanticIndex = semanticIndex;
++                desc.SemanticIndex = attr.semanticIndex + semanticIndex;
+ 
+                 if (attr.isInstanced)
+                 {

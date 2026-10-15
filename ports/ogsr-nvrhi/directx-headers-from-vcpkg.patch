@@ -1,0 +1,15 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5b82685..b1bf1e6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -120,6 +120,10 @@ if(NVRHI_WITH_VULKAN)
+     endif()
+ endif()
+ 
++if(NVRHI_WITH_DX12 AND NOT NVRHI_FETCH_DIRECTX_HEADERS)
++    find_package(directx-headers CONFIG REQUIRED)
++endif()
++
+ if(NVRHI_WITH_DX12)
+     set(nvrhi_directx_headers_target "")
+     set(nvrhi_directx_guids_target "")

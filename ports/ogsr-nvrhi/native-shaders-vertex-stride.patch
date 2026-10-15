@@ -1,0 +1,119 @@
+diff --git a/include/nvrhi/d3d11.h b/include/nvrhi/d3d11.h
+index 7b17183..2afe105 100644
+--- a/include/nvrhi/d3d11.h
++++ b/include/nvrhi/d3d11.h
+@@ -47,4 +47,9 @@ namespace nvrhi::d3d11
+     NVRHI_API DeviceHandle createDevice(const DeviceDesc& desc);
+ 
+     NVRHI_API DXGI_FORMAT convertFormat(nvrhi::Format format);
++
++    // NVRHI handles over the application's own D3D11 objects (nothing is created, the handle holds a reference): a shader of desc.shaderType
++    // (bytecode: kept for createInputLayout, may be null), an input layout with the attributes it was made from (their elementStride per slot)
++    NVRHI_API ShaderHandle createShaderHandleForNative(const ShaderDesc& desc, ID3D11DeviceChild* shader, const void* bytecode, size_t bytecodeSize);
++    NVRHI_API InputLayoutHandle createInputLayoutHandleForNative(ID3D11InputLayout* layout, const VertexAttributeDesc* attributes, uint32_t attributeCount);
+ }
+diff --git a/include/nvrhi/nvrhi.h b/include/nvrhi/nvrhi.h
+index 2b21d2d..e930709 100644
+--- a/include/nvrhi/nvrhi.h
++++ b/include/nvrhi/nvrhi.h
+@@ -2755,18 +2755,22 @@ namespace nvrhi
+         IBuffer* buffer = nullptr;
+         uint32_t slot;
+         uint64_t offset;
++        // D3D11 / D3D12: the vertex stride of this binding; 0 = the input layout's elementStride for the slot
++        uint32_t stride = 0;
+ 
+         bool operator ==(const VertexBufferBinding& b) const
+         {
+             return buffer == b.buffer
+                 && slot == b.slot
+-                && offset == b.offset;
++                && offset == b.offset
++                && stride == b.stride;
+         }
+         bool operator !=(const VertexBufferBinding& b) const { return !(*this == b); }
+ 
+         VertexBufferBinding& setBuffer(IBuffer* value) { buffer = value; return *this; }
+         VertexBufferBinding& setSlot(uint32_t value) { slot = value; return *this; }
+         VertexBufferBinding& setOffset(uint64_t value) { offset = value; return *this; }
++        VertexBufferBinding& setStride(uint32_t value) { stride = value; return *this; }
+     };
+ 
+     struct IndexBufferBinding
+diff --git a/src/d3d11/d3d11-graphics.cpp b/src/d3d11/d3d11-graphics.cpp
+index 8b459c7..5d9b95a 100644
+--- a/src/d3d11/d3d11-graphics.cpp
++++ b/src/d3d11/d3d11-graphics.cpp
+@@ -313,7 +313,13 @@ namespace nvrhi::d3d11
+                 assert(binding.offset <= UINT_MAX);
+ 
+                 pVertexBuffers[binding.slot] = checked_cast<Buffer*>(binding.buffer)->resource;
+-                pVertexBufferStrides[binding.slot] = inputLayout->elementStrides.at(binding.slot);
++                if (binding.stride)
++                    pVertexBufferStrides[binding.slot] = binding.stride;
++                else
++                {
++                    const auto stride = inputLayout->elementStrides.find(binding.slot);
++                    pVertexBufferStrides[binding.slot] = stride != inputLayout->elementStrides.end() ? stride->second : 0;
++                }
+                 pVertexBufferOffsets[binding.slot] = UINT(binding.offset);
+                 maxVbIndex = std::max(maxVbIndex, binding.slot);
+             }
+diff --git a/src/d3d11/d3d11-shader.cpp b/src/d3d11/d3d11-shader.cpp
+index 4432c0f..74c9ddc 100644
+--- a/src/d3d11/d3d11-shader.cpp
++++ b/src/d3d11/d3d11-shader.cpp
+@@ -374,4 +374,39 @@ namespace nvrhi::d3d11
+         return InputLayoutHandle::Create(inputLayout);
+     }
+ 
++    ShaderHandle createShaderHandleForNative(const ShaderDesc& desc, ID3D11DeviceChild* native, const void* bytecode, const size_t bytecodeSize)
++    {
++        if (!native)
++            return nullptr;
++
++        RefCountPtr<Shader> shader = RefCountPtr<Shader>::Create(new Shader());
++        shader->desc = desc;
++        switch (desc.shaderType)  // NOLINT(clang-diagnostic-switch-enum)
++        {
++        case ShaderType::Vertex: shader->VS = static_cast<ID3D11VertexShader*>(native); break;
++        case ShaderType::Hull: shader->HS = static_cast<ID3D11HullShader*>(native); break;
++        case ShaderType::Domain: shader->DS = static_cast<ID3D11DomainShader*>(native); break;
++        case ShaderType::Geometry: shader->GS = static_cast<ID3D11GeometryShader*>(native); break;
++        case ShaderType::Pixel: shader->PS = static_cast<ID3D11PixelShader*>(native); break;
++        case ShaderType::Compute: shader->CS = static_cast<ID3D11ComputeShader*>(native); break;
++        default: return nullptr;
++        }
++        if (bytecode && bytecodeSize)
++            shader->bytecode.assign(static_cast<const char*>(bytecode), static_cast<const char*>(bytecode) + bytecodeSize);
++        return shader;
++    }
++
++    InputLayoutHandle createInputLayoutHandleForNative(ID3D11InputLayout* native, const VertexAttributeDesc* attributes, const uint32_t attributeCount)
++    {
++        if (!native)
++            return nullptr;
++
++        InputLayout* inputLayout = new InputLayout();
++        inputLayout->layout = native;
++        inputLayout->attributes.assign(attributes, attributes + attributeCount);
++        for (uint32_t i = 0; i < attributeCount; i++)
++            inputLayout->elementStrides.emplace(attributes[i].bufferIndex, attributes[i].elementStride);
++        return InputLayoutHandle::Create(inputLayout);
++    }
++
+ } // nanmespace nvrhi::d3d11
+\ No newline at end of file
+diff --git a/src/d3d12/d3d12-graphics.cpp b/src/d3d12/d3d12-graphics.cpp
+index e40c392..f29a7f3 100644
+--- a/src/d3d12/d3d12-graphics.cpp
++++ b/src/d3d12/d3d12-graphics.cpp
+@@ -402,7 +402,7 @@ namespace nvrhi::d3d12
+                 if (binding.slot >= c_MaxVertexAttributes)
+                     continue;
+ 
+-                VBVs[binding.slot].StrideInBytes = inputLayout->elementStrides[binding.slot];
++                VBVs[binding.slot].StrideInBytes = binding.stride ? binding.stride : inputLayout->elementStrides[binding.slot];
+                 VBVs[binding.slot].SizeInBytes = (UINT)(std::min(buffer->desc.byteSize - binding.offset, (uint64_t)ULONG_MAX));
+                 VBVs[binding.slot].BufferLocation = buffer->gpuVA + binding.offset;
+                 maxVbIndex = std::max(maxVbIndex, binding.slot);

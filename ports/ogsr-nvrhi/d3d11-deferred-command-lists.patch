@@ -1,0 +1,797 @@
+diff --git a/src/d3d11/d3d11-backend.h b/src/d3d11/d3d11-backend.h
+index a25854a..53072b5 100644
+--- a/src/d3d11/d3d11-backend.h
++++ b/src/d3d11/d3d11-backend.h
+@@ -29,6 +29,7 @@
+ 
+ #include <d3d11_1.h>
+ #include <map>
++#include <mutex>
+ #include <vector>
+ 
+ #ifndef NVRHI_D3D11_WITH_NVAPI
+@@ -93,6 +94,8 @@ namespace nvrhi::d3d11
+ 
+     private:
+         const Context& m_Context;
++        // the view getters run on every recording thread (binding sets, framebuffers, clears)
++        std::mutex m_ViewMutex;
+         TextureBindingKey_HashMap<RefCountPtr<ID3D11ShaderResourceView>> m_ShaderResourceViews;
+         TextureBindingKey_HashMap<RefCountPtr<ID3D11RenderTargetView>> m_RenderTargetViews;
+         TextureBindingKey_HashMap<RefCountPtr<ID3D11DepthStencilView>> m_DepthStencilViews;
+@@ -127,6 +130,7 @@ namespace nvrhi::d3d11
+         
+     private:
+         const Context& m_Context;
++        std::mutex m_ViewMutex;
+         std::unordered_map<BufferBindingKey, RefCountPtr<ID3D11ShaderResourceView>> m_ShaderResourceViews;
+         std::unordered_map<BufferBindingKey, RefCountPtr<ID3D11UnorderedAccessView>> m_UnorderedAccessViews;
+     };
+@@ -289,9 +293,16 @@ namespace nvrhi::d3d11
+     class CommandList : public RefCounter<ICommandList>
+     {
+     public:
+-        explicit CommandList(const Context& context, IDevice* device, const CommandListParameters& params);
++        // d3dContext: the immediate context, or a deferred context the list records into (closed with FinishCommandList, run by Device::executeCommandLists)
++        explicit CommandList(const Context& context, IDevice* device, const CommandListParameters& params, ID3D11DeviceContext* d3dContext);
+         ~CommandList() override;
+ 
++        bool isImmediate() const { return m_IsImmediate; }
++        // the commands recorded between open and close of a deferred list (nullptr for the immediate list or after it ran)
++        RefCountPtr<ID3D11CommandList> takeRecordedCommands();
++        // forgets the cached state without touching the context: the immediate list after ExecuteCommandList cleared its context
++        void resetStateCache();
++
+         // IResource implementation
+ 
+         Object getNativeObject(ObjectType objectType) override;
+@@ -387,6 +398,11 @@ namespace nvrhi::d3d11
+         IDevice* m_Device; // weak reference - to avoid a cyclic reference between Device and its ImmediateCommandList
+         CommandListParameters m_Desc;
+ 
++        RefCountPtr<ID3D11DeviceContext> m_D3DContext;
++        RefCountPtr<ID3D11DeviceContext1> m_D3DContext1;
++        RefCountPtr<ID3D11CommandList> m_RecordedCommands;
++        bool m_IsImmediate = true;
++
+         RefCountPtr<ID3DUserDefinedAnnotation> m_UserDefinedAnnotation;
+ #if NVRHI_WITH_AFTERMATH
+         AftermathMarkerTracker m_AftermathTracker;
+@@ -526,7 +542,7 @@ namespace nvrhi::d3d11
+         bool bindAccelStructMemory(rt::IAccelStruct* as, IHeap* heap, uint64_t offset) override;
+ 
+         CommandListHandle createCommandList(const CommandListParameters& params = CommandListParameters()) override;
+-        uint64_t executeCommandLists(ICommandList* const* pCommandLists, size_t numCommandLists, CommandQueue executionQueue = CommandQueue::Graphics) override { (void)pCommandLists; (void)numCommandLists; (void)executionQueue; return 0; }
++        uint64_t executeCommandLists(ICommandList* const* pCommandLists, size_t numCommandLists, CommandQueue executionQueue = CommandQueue::Graphics) override;
+         void queueWaitForCommandList(CommandQueue waitQueue, CommandQueue executionQueue, uint64_t instance) override { (void)waitQueue; (void)executionQueue; (void)instance; }
+         bool waitForIdle() override;
+         CommandListLifetimeTrackerHandle createCommandListLifetimeTracker(CommandQueue executionQueue) override;
+@@ -547,6 +563,8 @@ namespace nvrhi::d3d11
+         EventQueryHandle m_WaitForIdleQuery;
+         CommandListHandle m_ImmediateCommandList;
+ 
++        // pipelines are created from every recording thread
++        std::mutex m_StateMutex;
+         std::unordered_map<size_t, RefCountPtr<ID3D11BlendState>> m_BlendStates;
+         std::unordered_map<size_t, RefCountPtr<ID3D11DepthStencilState>> m_DepthStencilStates;
+         std::unordered_map<size_t, RefCountPtr<ID3D11RasterizerState>> m_RasterizerStates;
+diff --git a/src/d3d11/d3d11-buffer.cpp b/src/d3d11/d3d11-buffer.cpp
+index 294c3c5..90d78a2 100644
+--- a/src/d3d11/d3d11-buffer.cpp
++++ b/src/d3d11/d3d11-buffer.cpp
+@@ -152,13 +152,13 @@ namespace nvrhi::d3d11
+ 
+         if (buffer->desc.cpuAccess == CpuAccessMode::Write)
+         {
+-            // we can map if it it's D3D11_USAGE_DYNAMIC, but not UpdateSubresource
++            // we can map if it it's D3D11_USAGE_DYNAMIC, but not UpdateSubresource.
++            // D3D11 rejects MAP_WRITE on dynamic buffers: a write at offset 0 discards the buffer, a write further in is NO_OVERWRITE
++            // (a ring: the caller does not overwrite what the GPU may still read and starts over at 0)
+             D3D11_MAPPED_SUBRESOURCE mappedData;
+-            D3D11_MAP mapType = D3D11_MAP_WRITE_DISCARD;
+-            if (destOffsetBytes > 0 || dataSize + destOffsetBytes < buffer->desc.byteSize)
+-                mapType = D3D11_MAP_WRITE;
++            const D3D11_MAP mapType = destOffsetBytes > 0 ? D3D11_MAP_WRITE_NO_OVERWRITE : D3D11_MAP_WRITE_DISCARD;
+ 
+-            const HRESULT res = m_Context.immediateContext->Map(buffer->resource, 0, mapType, 0, &mappedData);
++            const HRESULT res = m_D3DContext->Map(buffer->resource, 0, mapType, 0, &mappedData);
+             if (FAILED(res))
+             {
+                 std::stringstream ss;
+@@ -169,14 +169,14 @@ namespace nvrhi::d3d11
+             }
+ 
+             memcpy((char*)mappedData.pData + destOffsetBytes, data, dataSize);
+-            m_Context.immediateContext->Unmap(buffer->resource, 0);
++            m_D3DContext->Unmap(buffer->resource, 0);
+         }
+         else
+         {
+             D3D11_BOX box = { UINT(destOffsetBytes), 0, 0, UINT(destOffsetBytes + dataSize), 1, 1 };
+             bool useBox = destOffsetBytes > 0 || dataSize < buffer->desc.byteSize;
+ 
+-            m_Context.immediateContext->UpdateSubresource(buffer->resource, 0, useBox ? &box : nullptr, data, (UINT)dataSize, 0);
++            m_D3DContext->UpdateSubresource(buffer->resource, 0, useBox ? &box : nullptr, data, (UINT)dataSize, 0);
+         }
+     }
+ 
+@@ -191,7 +191,7 @@ namespace nvrhi::d3d11
+         ID3D11UnorderedAccessView* uav = checked_cast<Buffer*>(buffer)->getUAV(Format::UNKNOWN, EntireBuffer, viewType);
+ 
+         UINT clearValues[4] = { clearValue, clearValue, clearValue, clearValue };
+-        m_Context.immediateContext->ClearUnorderedAccessViewUint(uav, clearValues);
++        m_D3DContext->ClearUnorderedAccessViewUint(uav, clearValues);
+     }
+ 
+     void CommandList::copyBuffer(IBuffer* _dest, uint64_t destOffsetBytes, IBuffer* _src, uint64_t srcOffsetBytes, uint64_t dataSizeBytes)
+@@ -210,7 +210,7 @@ namespace nvrhi::d3d11
+         srcBox.top = 0;
+         srcBox.front = 0;
+         srcBox.back = 1;
+-        m_Context.immediateContext->CopySubresourceRegion(dest->resource, 0, (UINT)destOffsetBytes, 0, 0, src->resource, 0, &srcBox);
++        m_D3DContext->CopySubresourceRegion(dest->resource, 0, (UINT)destOffsetBytes, 0, 0, src->resource, 0, &srcBox);
+     }
+     
+     void *Device::mapBuffer(IBuffer* _buffer, CpuAccessMode flags)
+@@ -288,6 +288,7 @@ namespace nvrhi::d3d11
+ 
+         range = range.resolve(desc);
+ 
++        std::lock_guard lock(m_ViewMutex);
+         RefCountPtr<ID3D11ShaderResourceView>& srv = m_ShaderResourceViews[BufferBindingKey(range, format, type)];
+         if (srv)
+             return srv;
+@@ -351,6 +352,7 @@ namespace nvrhi::d3d11
+ 
+         range = range.resolve(desc);
+ 
++        std::lock_guard lock(m_ViewMutex);
+         RefCountPtr<ID3D11UnorderedAccessView>& uav = m_UnorderedAccessViews[BufferBindingKey(range, format, type)];
+         if (uav)
+             return uav;
+diff --git a/src/d3d11/d3d11-commandlist.cpp b/src/d3d11/d3d11-commandlist.cpp
+index 37e7666..c7d00d3 100644
+--- a/src/d3d11/d3d11-commandlist.cpp
++++ b/src/d3d11/d3d11-commandlist.cpp
+@@ -25,12 +25,15 @@
+ 
+ namespace nvrhi::d3d11
+ {
+-    CommandList::CommandList(const Context& context, IDevice* device, const CommandListParameters& params)
++    CommandList::CommandList(const Context& context, IDevice* device, const CommandListParameters& params, ID3D11DeviceContext* d3dContext)
+         : m_Context(context)
+         , m_Device(device)
+         , m_Desc(params)
++        , m_D3DContext(d3dContext)
++        , m_IsImmediate(d3dContext->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
+     {
+-        m_Context.immediateContext->QueryInterface(IID_PPV_ARGS(&m_UserDefinedAnnotation));
++        m_D3DContext->QueryInterface(IID_PPV_ARGS(&m_D3DContext1));
++        m_D3DContext->QueryInterface(IID_PPV_ARGS(&m_UserDefinedAnnotation));
+ #if NVRHI_WITH_AFTERMATH
+         if (m_Device->isAftermathEnabled())
+             m_Device->getAftermathCrashDumpHelper().registerAftermathMarkerTracker(&m_AftermathTracker);
+@@ -50,7 +53,7 @@ namespace nvrhi::d3d11
+         switch (objectType)
+         {
+         case ObjectTypes::D3D11_DeviceContext:
+-            return Object(m_Context.immediateContext);
++            return Object(m_D3DContext);
+         default:
+             return nullptr;
+         }
+@@ -58,7 +61,13 @@ namespace nvrhi::d3d11
+ 
+     void CommandList::open()
+     {
+-        clearState();
++        // a deferred list that was closed but never executed drops its commands
++        m_RecordedCommands = nullptr;
++        // a deferred context is in its default state when it is new and after close (FinishCommandList(FALSE)): no ClearState
++        if (m_IsImmediate)
++            clearState();
++        else
++            resetStateCache();
+     }
+ 
+     void CommandList::close()
+@@ -66,20 +75,43 @@ namespace nvrhi::d3d11
+         while (m_NumUAVOverlapCommands > 0)
+             leaveUAVOverlapSection();
+ 
+-        clearState();
++        if (m_IsImmediate)
++        {
++            clearState();
++            return;
++        }
++
++        // FinishCommandList(FALSE) also resets the deferred context to its default state
++        m_RecordedCommands = nullptr;
++        const HRESULT res = m_D3DContext->FinishCommandList(FALSE, &m_RecordedCommands);
++        if (FAILED(res))
++            m_Context.error("FinishCommandList call failed");
++        resetStateCache();
++    }
++
++    RefCountPtr<ID3D11CommandList> CommandList::takeRecordedCommands()
++    {
++        RefCountPtr<ID3D11CommandList> commands = m_RecordedCommands;
++        m_RecordedCommands = nullptr;
++        return commands;
+     }
+ 
+     void CommandList::clearState()
+     {
+-        m_Context.immediateContext->ClearState();
++        m_D3DContext->ClearState();
+ 
+ #if NVRHI_D3D11_WITH_NVAPI
+         if (m_CurrentGraphicsStateValid && m_CurrentSinglePassStereoState.enabled)
+         {
+-            NvAPI_D3D_SetSinglePassStereoMode(m_Context.immediateContext, 1, 0, 0);
++            NvAPI_D3D_SetSinglePassStereoMode(m_D3DContext, 1, 0, 0);
+         }
+ #endif
+ 
++        resetStateCache();
++    }
++
++    void CommandList::resetStateCache()
++    {
+         m_CurrentGraphicsStateValid = false;
+         m_CurrentComputeStateValid = false;
+ 
+@@ -118,7 +150,7 @@ namespace nvrhi::d3d11
+     {
+ #if NVRHI_D3D11_WITH_NVAPI
+         if (m_NumUAVOverlapCommands == 0)
+-            NvAPI_D3D11_BeginUAVOverlap(m_Context.immediateContext);
++            NvAPI_D3D11_BeginUAVOverlap(m_D3DContext);
+ #endif
+ 
+         m_NumUAVOverlapCommands += 1;
+@@ -128,7 +160,7 @@ namespace nvrhi::d3d11
+     {
+ #if NVRHI_D3D11_WITH_NVAPI
+         if (m_NumUAVOverlapCommands == 1)
+-            NvAPI_D3D11_EndUAVOverlap(m_Context.immediateContext);
++            NvAPI_D3D11_EndUAVOverlap(m_D3DContext);
+ #endif
+ 
+         m_NumUAVOverlapCommands = std::max(0, m_NumUAVOverlapCommands - 1);
+@@ -164,18 +196,18 @@ namespace nvrhi::d3d11
+ #endif
+     }
+     
+-    static char g_PushConstantPaddingBuffer[c_MaxPushConstantSize] = {};
+-
+     void CommandList::setPushConstants(const void* data, size_t byteSize)
+     {
+         if (byteSize > c_MaxPushConstantSize)
+             return;
+ 
+-        memcpy(g_PushConstantPaddingBuffer, data, byteSize);
++        // on the stack: lists record on several threads. The buffer is shared by all lists: a deferred list's update runs in order when it executes
++        char paddingBuffer[c_MaxPushConstantSize] = {};
++        memcpy(paddingBuffer, data, byteSize);
+ 
+-        m_Context.immediateContext->UpdateSubresource(
+-            m_Context.pushConstantBuffer, 0, nullptr, 
+-            g_PushConstantPaddingBuffer, 0, 0);
++        m_D3DContext->UpdateSubresource(
++            m_Context.pushConstantBuffer, 0, nullptr,
++            paddingBuffer, 0, 0);
+     }
+ 
+     void CommandList::setMeshletState(const MeshletState&)
+diff --git a/src/d3d11/d3d11-compute.cpp b/src/d3d11/d3d11-compute.cpp
+index 3d07a17..86dd3db 100644
+--- a/src/d3d11/d3d11-compute.cpp
++++ b/src/d3d11/d3d11-compute.cpp
+@@ -53,7 +53,7 @@ namespace nvrhi::d3d11
+         bool updatePipeline = !m_CurrentComputeStateValid || pso != m_CurrentComputePipeline;
+         bool updateBindings = updatePipeline || arraysAreDifferent(m_CurrentBindings, state.bindings);
+ 
+-        if (updatePipeline) m_Context.immediateContext->CSSetShader(pso->shader, nullptr, 0);
++        if (updatePipeline) m_D3DContext->CSSetShader(pso->shader, nullptr, 0);
+         if (updateBindings) bindComputeResourceSets(state.bindings, m_CurrentComputeStateValid ? &m_CurrentBindings : nullptr);
+ 
+         m_CurrentIndirectBuffer = state.indirectParams;
+@@ -74,7 +74,7 @@ namespace nvrhi::d3d11
+ 
+     void CommandList::dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ)
+     {
+-        m_Context.immediateContext->Dispatch(groupsX, groupsY, groupsZ);
++        m_D3DContext->Dispatch(groupsX, groupsY, groupsZ);
+     }
+ 
+     void CommandList::dispatchIndirect(uint32_t offsetBytes)
+@@ -83,7 +83,7 @@ namespace nvrhi::d3d11
+         
+         if (indirectParams) // validation layer will issue an error otherwise
+         {
+-            m_Context.immediateContext->DispatchIndirect(indirectParams->resource, (UINT)offsetBytes);
++            m_D3DContext->DispatchIndirect(indirectParams->resource, (UINT)offsetBytes);
+         }
+     }
+ 
+diff --git a/src/d3d11/d3d11-device.cpp b/src/d3d11/d3d11-device.cpp
+index f1392ab..58096b0 100644
+--- a/src/d3d11/d3d11-device.cpp
++++ b/src/d3d11/d3d11-device.cpp
+@@ -23,6 +23,7 @@
+ #include "d3d11-backend.h"
+ 
+ #include <nvrhi/utils.h>
++#include <nvrhi/common/misc.h>
+ #include <sstream>
+ #include <iomanip>
+ 
+@@ -118,7 +119,7 @@ namespace nvrhi::d3d11
+             m_Context.error(ss.str());
+         }
+ 
+-        m_ImmediateCommandList = CommandListHandle::Create(new CommandList(m_Context, this, CommandListParameters()));   
++        m_ImmediateCommandList = CommandListHandle::Create(new CommandList(m_Context, this, CommandListParameters(), m_Context.immediateContext));
+     }
+ 
+     Device::~Device()
+@@ -164,19 +165,54 @@ namespace nvrhi::d3d11
+ 
+     CommandListHandle Device::createCommandList(const CommandListParameters& params)
+     {
+-        if (!params.enableImmediateExecution)
++        if (params.queueType != CommandQueue::Graphics)
+         {
+-            m_Context.error("Deferred command lists are not supported by the D3D11 backend.");
++            m_Context.error("Non-graphics queues are not supported by the D3D11 backend.");
+             return nullptr;
+         }
+ 
+-        if (params.queueType != CommandQueue::Graphics)
++        if (params.enableImmediateExecution)
++            return m_ImmediateCommandList;
++
++        // a deferred list: its own deferred context, recorded on any thread, run in order by executeCommandLists
++        RefCountPtr<ID3D11DeviceContext> deferredContext;
++        const HRESULT res = m_Context.device->CreateDeferredContext(0, &deferredContext);
++        if (FAILED(res))
+         {
+-            m_Context.error("Non-graphics queues are not supported by the D3D11 backend.");
++            std::stringstream ss;
++            ss << "CreateDeferredContext call failed, HRESULT = 0x" << std::hex << std::setw(8) << res;
++            m_Context.error(ss.str());
+             return nullptr;
+         }
+-        
+-        return m_ImmediateCommandList;
++
++        return CommandListHandle::Create(new CommandList(m_Context, this, params, deferredContext));
++    }
++
++    uint64_t Device::executeCommandLists(ICommandList* const* pCommandLists, size_t numCommandLists, CommandQueue executionQueue)
++    {
++        (void)executionQueue;
++
++        // the immediate list ran while it recorded; a deferred list runs its FinishCommandList result here, in the given order
++        bool executed = false;
++        for (size_t i = 0; i < numCommandLists; i++)
++        {
++            CommandList* commandList = checked_cast<CommandList*>(pCommandLists[i]);
++            if (commandList->isImmediate())
++                continue;
++
++            RefCountPtr<ID3D11CommandList> commands = commandList->takeRecordedCommands();
++            if (!commands)
++                continue;
++
++            m_Context.immediateContext->ExecuteCommandList(commands, FALSE);
++            executed = true;
++        }
++
++        // ExecuteCommandList(FALSE) leaves the immediate context in its default state
++        if (executed)
++            checked_cast<CommandList*>(m_ImmediateCommandList.Get())->resetStateCache();
++
++        return 0;
+     }
+ 
+     void Device::getTextureTiling(ITexture* texture, uint32_t* numTiles, PackedMipDesc* desc, TileShape* tileShape, uint32_t* subresourceTilingsNum, SubresourceTiling* subresourceTilings)
+diff --git a/src/d3d11/d3d11-graphics.cpp b/src/d3d11/d3d11-graphics.cpp
+index 41cfedd..8b459c7 100644
+--- a/src/d3d11/d3d11-graphics.cpp
++++ b/src/d3d11/d3d11-graphics.cpp
+@@ -114,16 +114,16 @@ namespace nvrhi::d3d11
+ 
+     void CommandList::bindGraphicsPipeline(const GraphicsPipeline* pso) const
+     {
+-        m_Context.immediateContext->IASetPrimitiveTopology(pso->primitiveTopology);
+-        m_Context.immediateContext->IASetInputLayout(pso->inputLayout ? pso->inputLayout->layout : nullptr);
++        m_D3DContext->IASetPrimitiveTopology(pso->primitiveTopology);
++        m_D3DContext->IASetInputLayout(pso->inputLayout ? pso->inputLayout->layout : nullptr);
+ 
+-        m_Context.immediateContext->RSSetState(pso->pRS);
++        m_D3DContext->RSSetState(pso->pRS);
+ 
+-        m_Context.immediateContext->VSSetShader(pso->pVS, nullptr, 0);
+-        m_Context.immediateContext->HSSetShader(pso->pHS, nullptr, 0);
+-        m_Context.immediateContext->DSSetShader(pso->pDS, nullptr, 0);
+-        m_Context.immediateContext->GSSetShader(pso->pGS, nullptr, 0);
+-        m_Context.immediateContext->PSSetShader(pso->pPS, nullptr, 0);
++        m_D3DContext->VSSetShader(pso->pVS, nullptr, 0);
++        m_D3DContext->HSSetShader(pso->pHS, nullptr, 0);
++        m_D3DContext->DSSetShader(pso->pDS, nullptr, 0);
++        m_D3DContext->GSSetShader(pso->pGS, nullptr, 0);
++        m_D3DContext->PSSetShader(pso->pPS, nullptr, 0);
+     }
+ 
+     static DX11_ViewportState convertViewportState(const ViewportState& vpState)
+@@ -199,14 +199,14 @@ namespace nvrhi::d3d11
+ 
+             if (pipeline->pixelShaderHasUAVs)
+             {
+-                m_Context.immediateContext->OMSetRenderTargetsAndUnorderedAccessViews(
++                m_D3DContext->OMSetRenderTargetsAndUnorderedAccessViews(
+                     UINT(RTVs.size()), RTVs.data(),
+                     framebuffer->DSV,
+                     D3D11_KEEP_UNORDERED_ACCESS_VIEWS, 0, nullptr, nullptr);
+             }
+             else
+             {
+-                m_Context.immediateContext->OMSetRenderTargets(
++                m_D3DContext->OMSetRenderTargets(
+                     UINT(RTVs.size()),RTVs.data(),
+                     framebuffer->DSV);
+             }
+@@ -222,13 +222,13 @@ namespace nvrhi::d3d11
+             m_CurrentStencilRefValue = pipeline->desc.renderState.depthStencilState.dynamicStencilRef
+                 ? state.dynamicStencilRefValue
+                 : pipeline->desc.renderState.depthStencilState.stencilRefValue;
+-            m_Context.immediateContext->OMSetDepthStencilState(pipeline->pDepthStencilState, m_CurrentStencilRefValue);
++            m_D3DContext->OMSetDepthStencilState(pipeline->pDepthStencilState, m_CurrentStencilRefValue);
+         }
+ 
+         if (updatePipeline || updateBlendState)
+         {
+             float blendFactor[4]{ state.blendConstantColor.r, state.blendConstantColor.g, state.blendConstantColor.b, state.blendConstantColor.a };
+-            m_Context.immediateContext->OMSetBlendState(pipeline->pBlendState, blendFactor, D3D11_DEFAULT_SAMPLE_MASK);
++            m_D3DContext->OMSetBlendState(pipeline->pBlendState, blendFactor, D3D11_DEFAULT_SAMPLE_MASK);
+         }
+ 
+         if (updateBindings)
+@@ -257,7 +257,7 @@ namespace nvrhi::d3d11
+                 }
+ 
+                 if(minUAVSlot <= maxUAVSlot)
+-                    m_Context.immediateContext->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, minUAVSlot, maxUAVSlot - minUAVSlot + 1, UAVs + minUAVSlot, initialCounts);
++                    m_D3DContext->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, minUAVSlot, maxUAVSlot - minUAVSlot + 1, UAVs + minUAVSlot, initialCounts);
+             }
+         }
+ 
+@@ -267,12 +267,12 @@ namespace nvrhi::d3d11
+ 
+             if (vpState.numViewports)
+             {
+-                m_Context.immediateContext->RSSetViewports(vpState.numViewports, vpState.viewports);
++                m_D3DContext->RSSetViewports(vpState.numViewports, vpState.viewports);
+             }
+ 
+             if (vpState.numScissorRects)
+             {
+-                m_Context.immediateContext->RSSetScissorRects(vpState.numScissorRects, vpState.scissorRects);
++                m_D3DContext->RSSetScissorRects(vpState.numScissorRects, vpState.scissorRects);
+             }
+         }
+ 
+@@ -283,7 +283,7 @@ namespace nvrhi::d3d11
+         {
+             const SinglePassStereoState& spsState = pipeline->desc.renderState.singlePassStereo;
+ 
+-            NvAPI_Status Status = NvAPI_D3D_SetSinglePassStereoMode(m_Context.immediateContext, spsState.enabled ? 2 : 1, spsState.renderTargetIndexOffset, spsState.independentViewportMask);
++            NvAPI_Status Status = NvAPI_D3D_SetSinglePassStereoMode(m_D3DContext, spsState.enabled ? 2 : 1, spsState.renderTargetIndexOffset, spsState.independentViewportMask);
+ 
+             if (Status != NVAPI_OK)
+             {
+@@ -327,7 +327,7 @@ namespace nvrhi::d3d11
+                 }
+             }
+ 
+-            m_Context.immediateContext->IASetVertexBuffers(0, maxVbIndex + 1,
++            m_D3DContext->IASetVertexBuffers(0, maxVbIndex + 1,
+                 pVertexBuffers,
+                 pVertexBufferStrides,
+                 pVertexBufferOffsets);
+@@ -337,13 +337,13 @@ namespace nvrhi::d3d11
+         {
+             if (state.indexBuffer.buffer)
+             {
+-                m_Context.immediateContext->IASetIndexBuffer(checked_cast<Buffer*>(state.indexBuffer.buffer)->resource,
++                m_D3DContext->IASetIndexBuffer(checked_cast<Buffer*>(state.indexBuffer.buffer)->resource,
+                     getDxgiFormatMapping(state.indexBuffer.format).srvFormat,
+                     state.indexBuffer.offset);
+             }
+             else
+             {
+-                m_Context.immediateContext->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
++                m_D3DContext->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+             }
+         }
+ 
+@@ -377,12 +377,12 @@ namespace nvrhi::d3d11
+ 
+     void CommandList::draw(const DrawArguments& args)
+     {
+-        m_Context.immediateContext->DrawInstanced(args.vertexCount, args.instanceCount, args.startVertexLocation, args.startInstanceLocation);
++        m_D3DContext->DrawInstanced(args.vertexCount, args.instanceCount, args.startVertexLocation, args.startInstanceLocation);
+     }
+ 
+     void CommandList::drawIndexed(const DrawArguments& args)
+     {
+-        m_Context.immediateContext->DrawIndexedInstanced(args.vertexCount, args.instanceCount, args.startIndexLocation, args.startVertexLocation, args.startInstanceLocation);
++        m_D3DContext->DrawIndexedInstanced(args.vertexCount, args.instanceCount, args.startIndexLocation, args.startVertexLocation, args.startInstanceLocation);
+     }
+ 
+     void CommandList::drawIndirect(uint32_t offsetBytes, uint32_t drawCount)
+@@ -394,7 +394,7 @@ namespace nvrhi::d3d11
+             // Simulate multi-command D3D12 ExecuteIndirect or Vulkan vkCmdDrawIndirect with a loop
+             for (uint32_t drawIndex = 0; drawIndex < drawCount; ++drawIndex)
+             {
+-                m_Context.immediateContext->DrawInstancedIndirect(indirectParams->resource, offsetBytes);
++                m_D3DContext->DrawInstancedIndirect(indirectParams->resource, offsetBytes);
+                 offsetBytes += sizeof(DrawIndirectArguments);
+             }
+         }
+@@ -409,7 +409,7 @@ namespace nvrhi::d3d11
+             // Simulate multi-command D3D12 ExecuteIndirect or Vulkan vkCmdDrawIndirect with a loop
+             for (uint32_t drawIndex = 0; drawIndex < drawCount; ++drawIndex)
+             {
+-                m_Context.immediateContext->DrawIndexedInstancedIndirect(indirectParams->resource, offsetBytes);
++                m_D3DContext->DrawIndexedInstancedIndirect(indirectParams->resource, offsetBytes);
+                 offsetBytes += sizeof(DrawIndexedIndirectArguments);
+             }
+         }
+@@ -439,6 +439,7 @@ namespace nvrhi::d3d11
+             hash_combine(hash, target.colorWriteMask);
+         }
+ 
++        std::lock_guard lock(m_StateMutex);
+         RefCountPtr<ID3D11BlendState> d3dBlendState = m_BlendStates[hash];
+ 
+         if (d3dBlendState)
+@@ -495,6 +496,7 @@ namespace nvrhi::d3d11
+         hash_combine(hash, depthState.backFaceStencil.passOp);
+         hash_combine(hash, depthState.backFaceStencil.stencilFunc);
+         
++        std::lock_guard lock(m_StateMutex);
+         RefCountPtr<ID3D11DepthStencilState> d3dDepthStencilState = m_DepthStencilStates[hash];
+ 
+         if (d3dDepthStencilState)
+@@ -556,6 +558,7 @@ namespace nvrhi::d3d11
+             }
+         }
+ 
++        std::lock_guard lock(m_StateMutex);
+         RefCountPtr<ID3D11RasterizerState> d3dRasterizerState = m_RasterizerStates[hash];
+ 
+         if (d3dRasterizerState)
+diff --git a/src/d3d11/d3d11-queries.cpp b/src/d3d11/d3d11-queries.cpp
+index e3e6adb..7371aa3 100644
+--- a/src/d3d11/d3d11-queries.cpp
++++ b/src/d3d11/d3d11-queries.cpp
+@@ -159,8 +159,8 @@ void CommandList::beginTimerQuery(ITimerQuery* _query)
+     TimerQuery* query = checked_cast<TimerQuery*>(_query);
+ 
+     assert(!query->resolved);
+-    m_Context.immediateContext->Begin(query->disjoint.Get());
+-    m_Context.immediateContext->End(query->start.Get());
++    m_D3DContext->Begin(query->disjoint.Get());
++    m_D3DContext->End(query->start.Get());
+ }
+ 
+ void CommandList::endTimerQuery(ITimerQuery* _query)
+@@ -168,8 +168,8 @@ void CommandList::endTimerQuery(ITimerQuery* _query)
+     TimerQuery* query = checked_cast<TimerQuery*>(_query);
+ 
+     assert(!query->resolved);
+-    m_Context.immediateContext->End(query->end.Get());
+-    m_Context.immediateContext->End(query->disjoint.Get());
++    m_D3DContext->End(query->end.Get());
++    m_D3DContext->End(query->disjoint.Get());
+ }
+ 
+ bool Device::pollTimerQuery(ITimerQuery* _query)
+diff --git a/src/d3d11/d3d11-resource-bindings.cpp b/src/d3d11/d3d11-resource-bindings.cpp
+index 36da522..d0b24bd 100644
+--- a/src/d3d11/d3d11-resource-bindings.cpp
++++ b/src/d3d11/d3d11-resource-bindings.cpp
+@@ -211,10 +211,10 @@ bool BindingSet::isSupersetOf(const BindingSet& other) const
+ 
+ #define D3D11_SET_ARRAY(method, min, max, array) \
+         if ((max) >= (min)) \
+-            m_Context.immediateContext->method(min, ((max) - (min) + 1), &(array)[min])
++            m_D3DContext->method(min, ((max) - (min) + 1), &(array)[min])
+ #define D3D11_SET_ARRAY1(method, min, max, array, offsets, counts) \
+         if ((max) >= (min)) \
+-            m_Context.immediateContext1->method(min, ((max) - (min) + 1), &(array)[min], &(offsets)[min], &(counts)[min])
++            m_D3DContext1->method(min, ((max) - (min) + 1), &(array)[min], &(offsets)[min], &(counts)[min])
+ 
+ void CommandList::prepareToBindGraphicsResourceSets(
+     const BindingSetVector& resourceSets, 
+@@ -336,7 +336,7 @@ void CommandList::bindGraphicsResourceSets(
+ 
+         if ((stagesToBind & ShaderType::Vertex) != 0)
+         {
+-            if (m_Context.immediateContext1)
++            if (m_D3DContext1)
+             {
+                 D3D11_SET_ARRAY1(VSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+             }
+@@ -350,7 +350,7 @@ void CommandList::bindGraphicsResourceSets(
+ 
+         if ((stagesToBind & ShaderType::Hull) != 0)
+         {
+-            if (m_Context.immediateContext1)
++            if (m_D3DContext1)
+             {
+                 D3D11_SET_ARRAY1(HSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+             }
+@@ -364,7 +364,7 @@ void CommandList::bindGraphicsResourceSets(
+ 
+         if ((stagesToBind & ShaderType::Domain) != 0)
+         {
+-            if (m_Context.immediateContext1)
++            if (m_D3DContext1)
+             {
+                 D3D11_SET_ARRAY1(DSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+             }
+@@ -378,7 +378,7 @@ void CommandList::bindGraphicsResourceSets(
+ 
+         if ((stagesToBind & ShaderType::Geometry) != 0)
+         {
+-            if (m_Context.immediateContext1)
++            if (m_D3DContext1)
+             {
+                 D3D11_SET_ARRAY1(GSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+             }
+@@ -392,7 +392,7 @@ void CommandList::bindGraphicsResourceSets(
+ 
+         if ((stagesToBind & ShaderType::Pixel) != 0)
+         {
+-            if (m_Context.immediateContext1)
++            if (m_D3DContext1)
+             {
+                 D3D11_SET_ARRAY1(PSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+             }
+@@ -466,7 +466,7 @@ void CommandList::bindComputeResourceSets(
+ 
+             if (set->maxUAVSlot >= set->minUAVSlot)
+             {
+-                m_Context.immediateContext->CSSetUnorderedAccessViews(set->minUAVSlot,
++                m_D3DContext->CSSetUnorderedAccessViews(set->minUAVSlot,
+                     set->maxUAVSlot - set->minUAVSlot + 1,
+                     NullUAVs,
+                     NullUAVInitialCounts);
+@@ -481,7 +481,7 @@ void CommandList::bindComputeResourceSets(
+         if ((set->visibility & ShaderType::Compute) == 0)
+             continue;
+ 
+-        if (m_Context.immediateContext1)
++        if (m_D3DContext1)
+         {
+             D3D11_SET_ARRAY1(CSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+         }
+@@ -494,7 +494,7 @@ void CommandList::bindComputeResourceSets(
+ 
+         if (set->maxUAVSlot >= set->minUAVSlot)
+         {
+-            m_Context.immediateContext->CSSetUnorderedAccessViews(set->minUAVSlot,
++            m_D3DContext->CSSetUnorderedAccessViews(set->minUAVSlot,
+                 set->maxUAVSlot - set->minUAVSlot + 1,
+                 &set->UAVs[set->minUAVSlot],
+                 NullUAVInitialCounts);
+diff --git a/src/d3d11/d3d11-texture.cpp b/src/d3d11/d3d11-texture.cpp
+index 18136a2..5ce1214 100644
+--- a/src/d3d11/d3d11-texture.cpp
++++ b/src/d3d11/d3d11-texture.cpp
+@@ -291,13 +291,13 @@ namespace nvrhi::d3d11
+             {
+                 ID3D11UnorderedAccessView* uav = texture->getUAV(Format::UNKNOWN, currentMipSlice, TextureDimension::Unknown);
+ 
+-                m_Context.immediateContext->ClearUnorderedAccessViewFloat(uav, &clearColor.r);
++                m_D3DContext->ClearUnorderedAccessViewFloat(uav, &clearColor.r);
+             }
+             else if (texture->desc.isRenderTarget)
+             {
+                 ID3D11RenderTargetView* rtv = texture->getRTV(Format::UNKNOWN, currentMipSlice);
+ 
+-                m_Context.immediateContext->ClearRenderTargetView(rtv, &clearColor.r);
++                m_D3DContext->ClearRenderTargetView(rtv, &clearColor.r);
+             }
+             else
+             {
+@@ -334,7 +334,7 @@ namespace nvrhi::d3d11
+                 UINT clearFlags = 0;
+                 if (clearDepth)   clearFlags |= D3D11_CLEAR_DEPTH;
+                 if (clearStencil) clearFlags |= D3D11_CLEAR_STENCIL;
+-                m_Context.immediateContext->ClearDepthStencilView(dsv, clearFlags, depth, stencil);
++                m_D3DContext->ClearDepthStencilView(dsv, clearFlags, depth, stencil);
+             }
+         }
+     }
+@@ -390,14 +390,14 @@ namespace nvrhi::d3d11
+                 ID3D11UnorderedAccessView* uav = texture->getUAV(interpretFormat, currentMipSlice, TextureDimension::Unknown);
+ 
+                 uint32_t clearValues[4] = { clearColor, clearColor, clearColor, clearColor };
+-                m_Context.immediateContext->ClearUnorderedAccessViewUint(uav, clearValues);
++                m_D3DContext->ClearUnorderedAccessViewUint(uav, clearValues);
+             }
+             else if (texture->desc.isRenderTarget)
+             {
+                 ID3D11RenderTargetView* rtv = texture->getRTV(Format::UNKNOWN, currentMipSlice);
+ 
+                 float clearValues[4] = { float(clearColor), float(clearColor), float(clearColor), float(clearColor) };
+-                m_Context.immediateContext->ClearRenderTargetView(rtv, clearValues);
++                m_D3DContext->ClearRenderTargetView(rtv, clearValues);
+             }
+             else
+             {
+@@ -450,7 +450,7 @@ namespace nvrhi::d3d11
+         srcBox.bottom = resolvedSrcSlice.y + resolvedSrcSlice.height;
+         srcBox.back = resolvedSrcSlice.z + resolvedSrcSlice.depth;
+ 
+-        m_Context.immediateContext->CopySubresourceRegion(dst,
++        m_D3DContext->CopySubresourceRegion(dst,
+                                        dstSubresource,
+                                        resolvedDstSlice.x, resolvedDstSlice.y, resolvedDstSlice.z,
+                                        src,
+@@ -491,7 +491,7 @@ namespace nvrhi::d3d11
+ 
+         UINT subresource = D3D11CalcSubresource(mipLevel, arraySlice, dest->desc.mipLevels);
+ 
+-        m_Context.immediateContext->UpdateSubresource(dest->resource, subresource, nullptr, data, UINT(rowPitch), UINT(depthPitch));
++        m_D3DContext->UpdateSubresource(dest->resource, subresource, nullptr, data, UINT(rowPitch), UINT(depthPitch));
+     }
+ 
+     void CommandList::resolveTexture(ITexture* _dest, const TextureSubresourceSet& dstSubresources, ITexture* _src, const TextureSubresourceSet& srcSubresources)
+@@ -514,7 +514,7 @@ namespace nvrhi::d3d11
+             {
+                 uint32_t dstSubresource = D3D11CalcSubresource(mipLevel + dstSR.baseMipLevel, arrayIndex + dstSR.baseArraySlice, dest->desc.mipLevels);
+                 uint32_t srcSubresource = D3D11CalcSubresource(mipLevel + srcSR.baseMipLevel, arrayIndex + srcSR.baseArraySlice, src->desc.mipLevels);
+-                m_Context.immediateContext->ResolveSubresource(dest->resource, dstSubresource, src->resource, srcSubresource, formatMapping.rtvFormat);
++                m_D3DContext->ResolveSubresource(dest->resource, dstSubresource, src->resource, srcSubresource, formatMapping.rtvFormat);
+             }
+         }
+     }
+@@ -584,6 +584,7 @@ namespace nvrhi::d3d11
+ 
+         subresources = subresources.resolve(desc, false);
+ 
++        std::lock_guard lock(m_ViewMutex);
+         RefCountPtr<ID3D11ShaderResourceView>& srvPtr = m_ShaderResourceViews[TextureBindingKey(subresources, format)];
+         if (srvPtr == nullptr)
+         {
+@@ -682,6 +683,7 @@ namespace nvrhi::d3d11
+ 
+         subresources = subresources.resolve(desc, true);
+ 
++        std::lock_guard lock(m_ViewMutex);
+         RefCountPtr<ID3D11RenderTargetView>& rtvPtr = m_RenderTargetViews[TextureBindingKey(subresources, format)];
+         if (rtvPtr == nullptr)
+         {
+@@ -763,6 +765,7 @@ namespace nvrhi::d3d11
+         subresources = subresources.resolve(desc, true);
+ 
+ 
++        std::lock_guard lock(m_ViewMutex);
+         RefCountPtr<ID3D11DepthStencilView>& dsvPtr = m_DepthStencilViews[TextureBindingKey(subresources, desc.format, isReadOnly)];
+         if (dsvPtr == nullptr)
+         {
+@@ -845,6 +848,7 @@ namespace nvrhi::d3d11
+ 
+         subresources = subresources.resolve(desc, true);
+ 
++        std::lock_guard lock(m_ViewMutex);
+         RefCountPtr<ID3D11UnorderedAccessView>& uavPtr = m_UnorderedAccessViews[TextureBindingKey(subresources, format)];
+         if (uavPtr == nullptr)
+         {

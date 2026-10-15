@@ -1,0 +1,72 @@
+diff --git a/src/d3d11/d3d11-backend.h b/src/d3d11/d3d11-backend.h
+index 66bb066..3a7c202 100644
+--- a/src/d3d11/d3d11-backend.h
++++ b/src/d3d11/d3d11-backend.h
+@@ -431,8 +431,11 @@ namespace nvrhi::d3d11
+         static_vector<BindingSetHandle, c_MaxBindingLayouts> m_CurrentBindings;
+         static_vector<VertexBufferBinding, c_MaxVertexAttributes> m_CurrentVertexBufferBindings;
+         IndexBufferBinding m_CurrentIndexBufferBinding{};
+-        static_vector<BufferHandle, c_MaxVertexAttributes> m_CurrentVertexBuffers;
+-        BufferHandle m_CurrentIndexBuffer;
++        // the D3D11 buffers of the bound vertex / index buffers, compared with the bindings: no references (an AddRef / Release pair per
++        // draw on buffers that several lists bind), and a binding whose nvrhi::Buffer was freed and another made at its address still
++        // differs, since the context keeps the bound D3D11 buffer alive
++        ID3D11Buffer* m_CurrentVertexBufferResources[c_MaxVertexAttributes] = {};
++        ID3D11Buffer* m_CurrentIndexBufferResource = nullptr;
+         ComputePipelineHandle m_CurrentComputePipeline;
+         SinglePassStereoState m_CurrentSinglePassStereoState{};
+         BufferHandle m_CurrentIndirectBuffer;
+diff --git a/src/d3d11/d3d11-commandlist.cpp b/src/d3d11/d3d11-commandlist.cpp
+index 543876e..9576e9b 100644
+--- a/src/d3d11/d3d11-commandlist.cpp
++++ b/src/d3d11/d3d11-commandlist.cpp
+@@ -130,8 +130,8 @@ namespace nvrhi::d3d11
+         m_CurrentGraphicsPipeline = nullptr;
+         m_CurrentFramebuffer = nullptr;
+         m_CurrentBindings.resize(0);
+-        m_CurrentVertexBuffers.resize(0);
+-        m_CurrentIndexBuffer = nullptr;
++        std::fill(std::begin(m_CurrentVertexBufferResources), std::end(m_CurrentVertexBufferResources), nullptr);
++        m_CurrentIndexBufferResource = nullptr;
+         m_CurrentComputePipeline = nullptr;
+         m_CurrentIndirectBuffer = nullptr;
+         m_CurrentBlendConstantColor = Color{};
+diff --git a/src/d3d11/d3d11-graphics.cpp b/src/d3d11/d3d11-graphics.cpp
+index 56ab9b1..476040e 100644
+--- a/src/d3d11/d3d11-graphics.cpp
++++ b/src/d3d11/d3d11-graphics.cpp
+@@ -239,8 +239,11 @@ namespace nvrhi::d3d11
+         const bool updateStencilRef = !m_CurrentGraphicsStateValid ||
+             (pipeline->desc.renderState.depthStencilState.dynamicStencilRef && state.dynamicStencilRefValue != m_CurrentStencilRefValue);
+             
+-        const bool updateIndexBuffer = !m_CurrentGraphicsStateValid || m_CurrentIndexBufferBinding != state.indexBuffer;
+-        const bool updateVertexBuffers = !m_CurrentGraphicsStateValid || arraysAreDifferent(m_CurrentVertexBufferBindings, state.vertexBuffers);
++        const auto resourceOf = [](IBuffer* buffer) -> ID3D11Buffer* { return buffer ? checked_cast<Buffer*>(buffer)->resource.Get() : nullptr; };
++        const bool updateIndexBuffer = !m_CurrentGraphicsStateValid || m_CurrentIndexBufferBinding != state.indexBuffer || m_CurrentIndexBufferResource != resourceOf(state.indexBuffer.buffer);
++        bool updateVertexBuffers = !m_CurrentGraphicsStateValid || arraysAreDifferent(m_CurrentVertexBufferBindings, state.vertexBuffers);
++        for (size_t i = 0; i < state.vertexBuffers.size() && !updateVertexBuffers; i++)
++            updateVertexBuffers = state.vertexBuffers[i].slot >= c_MaxVertexAttributes || m_CurrentVertexBufferResources[state.vertexBuffers[i].slot] != resourceOf(state.vertexBuffers[i].buffer);
+ 
+         BindingSetVector setsToBind;
+         if (updateBindings)
+@@ -449,14 +452,16 @@ namespace nvrhi::d3d11
+         if (updateVertexBuffers)
+         {
+             copyUsed(m_CurrentVertexBufferBindings, state.vertexBuffers);
+-            m_CurrentVertexBuffers.resize(state.vertexBuffers.size());
+-            for (size_t i = 0; i < state.vertexBuffers.size(); i++)
+-                m_CurrentVertexBuffers[i] = state.vertexBuffers[i].buffer;
++            // as IASetVertexBuffers above: the slots of the new bindings, the others null
++            std::fill(std::begin(m_CurrentVertexBufferResources), std::end(m_CurrentVertexBufferResources), nullptr);
++            for (const VertexBufferBinding& binding : state.vertexBuffers)
++                if (binding.slot < c_MaxVertexAttributes)
++                    m_CurrentVertexBufferResources[binding.slot] = resourceOf(binding.buffer);
+         }
+         if (updateIndexBuffer)
+         {
+             m_CurrentIndexBufferBinding = state.indexBuffer;
+-            m_CurrentIndexBuffer = state.indexBuffer.buffer;
++            m_CurrentIndexBufferResource = resourceOf(state.indexBuffer.buffer);
+         }
+     }
+ 

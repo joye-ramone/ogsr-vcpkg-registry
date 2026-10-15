@@ -1,0 +1,403 @@
+diff --git a/src/d3d11/d3d11-backend.h b/src/d3d11/d3d11-backend.h
+index 4145bf0..66bb066 100644
+--- a/src/d3d11/d3d11-backend.h
++++ b/src/d3d11/d3d11-backend.h
+@@ -284,6 +284,8 @@ namespace nvrhi::d3d11
+         UINT constantBufferCounts[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+         uint32_t minConstantBufferSlot = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
+         uint32_t maxConstantBufferSlot = 0;
++        // every constant buffer is bound whole (offset 0, its full size): bound with *SetConstantBuffers, without the ranges
++        bool wholeConstantBuffers = true;
+ 
+         ID3D11UnorderedAccessView* UAVs[D3D11_1_UAV_SLOT_COUNT] = {};
+         uint32_t minUAVSlot = D3D11_1_UAV_SLOT_COUNT;
+@@ -442,7 +444,25 @@ namespace nvrhi::d3d11
+         void copyTexture(ID3D11Resource* dst, const TextureDesc& dstDesc, const TextureSlice& dstSlice,
+             ID3D11Resource* src, const TextureDesc& srcDesc, const TextureSlice& srcSlice);
+         
+-        void bindGraphicsPipeline(const GraphicsPipeline* pso) const;
++        // what the graphics stages (VS, HS, DS, GS, PS) have bound: a binding set binds only the slots that differ, a pipeline only the
++        // objects that differ from the bound pipeline (prev, null when the context state is unknown); ~0 entries are unknown
++        struct BoundStage
++        {
++            ID3D11Buffer* constantBuffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
++            UINT constantBufferOffsets[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT]; // 0 / 0: bound whole
++            UINT constantBufferCounts[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
++            ID3D11ShaderResourceView* SRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
++            ID3D11SamplerState* samplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
++        };
++        mutable BoundStage m_BoundStages[5];
++        void forgetBoundStages();
++        // offsets / counts null: whole buffers
++        void bindStageConstantBuffers(uint32_t stage, uint32_t minSlot, uint32_t maxSlot, ID3D11Buffer* const* buffers, const UINT* offsets, const UINT* counts) const;
++        void bindStageShaderResources(uint32_t stage, uint32_t minSlot, uint32_t maxSlot, ID3D11ShaderResourceView* const* views) const;
++        void bindStageSamplers(uint32_t stage, uint32_t minSlot, uint32_t maxSlot, ID3D11SamplerState* const* samplers) const;
++        void bindStageSet(uint32_t stage, const BindingSet* set) const;
++
++        void bindGraphicsPipeline(const GraphicsPipeline* pso, const GraphicsPipeline* prev) const;
+ 
+         void prepareToBindGraphicsResourceSets(
+             const BindingSetVector& resourceSets,
+diff --git a/src/d3d11/d3d11-commandlist.cpp b/src/d3d11/d3d11-commandlist.cpp
+index 2f2f3a0..543876e 100644
+--- a/src/d3d11/d3d11-commandlist.cpp
++++ b/src/d3d11/d3d11-commandlist.cpp
+@@ -34,6 +34,7 @@ namespace nvrhi::d3d11
+     {
+         m_D3DContext->QueryInterface(IID_PPV_ARGS(&m_D3DContext1));
+         m_D3DContext->QueryInterface(IID_PPV_ARGS(&m_UserDefinedAnnotation));
++        forgetBoundStages();
+ #if NVRHI_WITH_AFTERMATH
+         if (m_Device->isAftermathEnabled())
+             m_Device->getAftermathCrashDumpHelper().registerAftermathMarkerTracker(&m_AftermathTracker);
+@@ -134,6 +135,13 @@ namespace nvrhi::d3d11
+         m_CurrentComputePipeline = nullptr;
+         m_CurrentIndirectBuffer = nullptr;
+         m_CurrentBlendConstantColor = Color{};
++        forgetBoundStages();
++    }
++
++    void CommandList::forgetBoundStages()
++    {
++        // all bits set: never a bound object, offset or count
++        memset(m_BoundStages, 0xff, sizeof(m_BoundStages));
+     }
+ 
+     void CommandList::setEnableUavBarriersForTexture(ITexture* texture, bool enableBarriers)
+diff --git a/src/d3d11/d3d11-graphics.cpp b/src/d3d11/d3d11-graphics.cpp
+index 778e043..56ab9b1 100644
+--- a/src/d3d11/d3d11-graphics.cpp
++++ b/src/d3d11/d3d11-graphics.cpp
+@@ -162,18 +162,27 @@ namespace nvrhi::d3d11
+         return createGraphicsPipeline(desc, fb->getFramebufferInfo());
+     }
+ 
+-    void CommandList::bindGraphicsPipeline(const GraphicsPipeline* pso) const
++    void CommandList::bindGraphicsPipeline(const GraphicsPipeline* pso, const GraphicsPipeline* prev) const
+     {
+-        m_D3DContext->IASetPrimitiveTopology(pso->primitiveTopology);
+-        m_D3DContext->IASetInputLayout(pso->inputLayout ? pso->inputLayout->layout : nullptr);
+-
+-        m_D3DContext->RSSetState(pso->pRS);
+-
+-        m_D3DContext->VSSetShader(pso->pVS, nullptr, 0);
+-        m_D3DContext->HSSetShader(pso->pHS, nullptr, 0);
+-        m_D3DContext->DSSetShader(pso->pDS, nullptr, 0);
+-        m_D3DContext->GSSetShader(pso->pGS, nullptr, 0);
+-        m_D3DContext->PSSetShader(pso->pPS, nullptr, 0);
++        if (!prev || prev->primitiveTopology != pso->primitiveTopology)
++            m_D3DContext->IASetPrimitiveTopology(pso->primitiveTopology);
++        ID3D11InputLayout* const inputLayout = pso->inputLayout ? pso->inputLayout->layout.Get() : nullptr;
++        if (!prev || (prev->inputLayout ? prev->inputLayout->layout.Get() : nullptr) != inputLayout)
++            m_D3DContext->IASetInputLayout(inputLayout);
++
++        if (!prev || prev->pRS != pso->pRS)
++            m_D3DContext->RSSetState(pso->pRS);
++
++        if (!prev || prev->pVS.Get() != pso->pVS.Get())
++            m_D3DContext->VSSetShader(pso->pVS, nullptr, 0);
++        if (!prev || prev->pHS.Get() != pso->pHS.Get())
++            m_D3DContext->HSSetShader(pso->pHS, nullptr, 0);
++        if (!prev || prev->pDS.Get() != pso->pDS.Get())
++            m_D3DContext->DSSetShader(pso->pDS, nullptr, 0);
++        if (!prev || prev->pGS.Get() != pso->pGS.Get())
++            m_D3DContext->GSSetShader(pso->pGS, nullptr, 0);
++        if (!prev || prev->pPS.Get() != pso->pPS.Get())
++            m_D3DContext->PSSetShader(pso->pPS, nullptr, 0);
+     }
+ 
+     static DX11_ViewportState convertViewportState(const ViewportState& vpState)
+@@ -262,23 +271,31 @@ namespace nvrhi::d3d11
+             }
+         }
+ 
++        // a new pipeline binds only the objects that differ from the bound one
++        const GraphicsPipeline* prevPipeline = m_CurrentGraphicsStateValid ? checked_cast<GraphicsPipeline*>(m_CurrentGraphicsPipeline.Get()) : nullptr;
++        bool blendStateSet = false;
+         if (updatePipeline)
+         {
+-            bindGraphicsPipeline(pipeline);
++            bindGraphicsPipeline(pipeline, prevPipeline);
+         }
+ 
+         if (updatePipeline || updateStencilRef)
+         {
+-            m_CurrentStencilRefValue = pipeline->desc.renderState.depthStencilState.dynamicStencilRef
++            const uint8_t stencilRef = pipeline->desc.renderState.depthStencilState.dynamicStencilRef
+                 ? state.dynamicStencilRefValue
+                 : pipeline->desc.renderState.depthStencilState.stencilRefValue;
+-            m_D3DContext->OMSetDepthStencilState(pipeline->pDepthStencilState, m_CurrentStencilRefValue);
++            if (!prevPipeline || prevPipeline->pDepthStencilState != pipeline->pDepthStencilState || stencilRef != m_CurrentStencilRefValue)
++            {
++                m_CurrentStencilRefValue = stencilRef;
++                m_D3DContext->OMSetDepthStencilState(pipeline->pDepthStencilState, m_CurrentStencilRefValue);
++            }
+         }
+ 
+-        if (updatePipeline || updateBlendState)
++        if ((updatePipeline && (!prevPipeline || prevPipeline->pBlendState != pipeline->pBlendState)) || updateBlendState)
+         {
+             float blendFactor[4]{ state.blendConstantColor.r, state.blendConstantColor.g, state.blendConstantColor.b, state.blendConstantColor.a };
+             m_D3DContext->OMSetBlendState(pipeline->pBlendState, blendFactor, D3D11_DEFAULT_SAMPLE_MASK);
++            blendStateSet = true;
+         }
+ 
+         if (updateBindings)
+@@ -425,7 +442,7 @@ namespace nvrhi::d3d11
+             copyUsed(m_CurrentViewports.scissorRects, state.viewport.scissorRects);
+         }
+         // OMSetBlendState above ran with this color
+-        if (updatePipeline || updateBlendState)
++        if (blendStateSet)
+             m_CurrentBlendConstantColor = state.blendConstantColor;
+         if (updateBindings)
+             copyUsed(m_CurrentBindings, state.bindings);
+diff --git a/src/d3d11/d3d11-resource-bindings.cpp b/src/d3d11/d3d11-resource-bindings.cpp
+index 58a0ec7..8803b0c 100644
+--- a/src/d3d11/d3d11-resource-bindings.cpp
++++ b/src/d3d11/d3d11-resource-bindings.cpp
+@@ -163,6 +163,8 @@ BindingSetHandle Device::createBindingSet(const BindingSetDesc& desc, IBindingLa
+             // Calculate the offset and size of the CB range, in 16-byte constants.
+             ret->constantBufferOffsets[slot] = (UINT)range.byteOffset / sizeOfConstantInBytes;
+             ret->constantBufferCounts[slot] = align((UINT)range.byteSize, c_ConstantBufferOffsetSizeAlignment) / sizeOfConstantInBytes;
++            if (range.byteOffset != 0 || range.byteSize != buffer->desc.byteSize)
++                ret->wholeConstantBuffers = false;
+ 
+             ret->minConstantBufferSlot = std::min(ret->minConstantBufferSlot, slot);
+             ret->maxConstantBufferSlot = std::max(ret->maxConstantBufferSlot, slot);
+@@ -189,6 +191,7 @@ BindingSetHandle Device::createBindingSet(const BindingSetDesc& desc, IBindingLa
+             // Set the offset and size of the CB range, in 16-byte constants, same as for constant buffers.
+             ret->constantBufferOffsets[slot] = 0;
+             ret->constantBufferCounts[slot] = align(c_MaxPushConstantSize, c_ConstantBufferOffsetSizeAlignment) / sizeOfConstantInBytes;
++            ret->wholeConstantBuffers = false;
+ 
+             ret->minConstantBufferSlot = std::min(ret->minConstantBufferSlot, slot);
+             ret->maxConstantBufferSlot = std::max(ret->maxConstantBufferSlot, slot);
+@@ -242,6 +245,101 @@ bool BindingSet::isSupersetOf(const BindingSet& other) const
+         && minConstantBufferSlot <= other.minConstantBufferSlot && maxConstantBufferSlot >= other.maxConstantBufferSlot;
+ }
+ 
++namespace
++{
++    using SetConstantBuffers = void (STDMETHODCALLTYPE ID3D11DeviceContext::*)(UINT, UINT, ID3D11Buffer* const*);
++    using SetConstantBuffers1 = void (STDMETHODCALLTYPE ID3D11DeviceContext1::*)(UINT, UINT, ID3D11Buffer* const*, const UINT*, const UINT*);
++    using SetShaderResources = void (STDMETHODCALLTYPE ID3D11DeviceContext::*)(UINT, UINT, ID3D11ShaderResourceView* const*);
++    using SetSamplers = void (STDMETHODCALLTYPE ID3D11DeviceContext::*)(UINT, UINT, ID3D11SamplerState* const*);
++
++    // the graphics stages in CommandList::m_BoundStages order
++    constexpr ShaderType c_GraphicsStages[] = { ShaderType::Vertex, ShaderType::Hull, ShaderType::Domain, ShaderType::Geometry, ShaderType::Pixel };
++    constexpr SetConstantBuffers c_SetConstantBuffers[] = { &ID3D11DeviceContext::VSSetConstantBuffers, &ID3D11DeviceContext::HSSetConstantBuffers,
++        &ID3D11DeviceContext::DSSetConstantBuffers, &ID3D11DeviceContext::GSSetConstantBuffers, &ID3D11DeviceContext::PSSetConstantBuffers };
++    constexpr SetConstantBuffers1 c_SetConstantBuffers1[] = { &ID3D11DeviceContext1::VSSetConstantBuffers1, &ID3D11DeviceContext1::HSSetConstantBuffers1,
++        &ID3D11DeviceContext1::DSSetConstantBuffers1, &ID3D11DeviceContext1::GSSetConstantBuffers1, &ID3D11DeviceContext1::PSSetConstantBuffers1 };
++    constexpr SetShaderResources c_SetShaderResources[] = { &ID3D11DeviceContext::VSSetShaderResources, &ID3D11DeviceContext::HSSetShaderResources,
++        &ID3D11DeviceContext::DSSetShaderResources, &ID3D11DeviceContext::GSSetShaderResources, &ID3D11DeviceContext::PSSetShaderResources };
++    constexpr SetSamplers c_SetSamplers[] = { &ID3D11DeviceContext::VSSetSamplers, &ID3D11DeviceContext::HSSetSamplers,
++        &ID3D11DeviceContext::DSSetSamplers, &ID3D11DeviceContext::GSSetSamplers, &ID3D11DeviceContext::PSSetSamplers };
++
++    // the slots in [minSlot, maxSlot] whose bound object differs; false when none
++    template <class T>
++    bool changedSlots(const T* bound, const T* next, uint32_t minSlot, uint32_t maxSlot, uint32_t& first, uint32_t& last)
++    {
++        first = UINT32_MAX;
++        last = 0;
++        for (uint32_t i = minSlot; i <= maxSlot; i++)
++        {
++            if (bound[i] != next[i])
++            {
++                first = std::min(first, i);
++                last = i;
++            }
++        }
++        return first != UINT32_MAX;
++    }
++}
++
++void CommandList::bindStageConstantBuffers(uint32_t stage, uint32_t minSlot, uint32_t maxSlot, ID3D11Buffer* const* buffers, const UINT* offsets, const UINT* counts) const
++{
++    BoundStage& bound = m_BoundStages[stage];
++    const bool ranges = offsets && m_D3DContext1;
++    uint32_t first = UINT32_MAX;
++    uint32_t last = 0;
++    for (uint32_t i = minSlot; i <= maxSlot; i++)
++    {
++        const UINT offset = ranges ? offsets[i] : 0;
++        const UINT count = ranges ? counts[i] : 0;
++        if (bound.constantBuffers[i] != buffers[i] || bound.constantBufferOffsets[i] != offset || bound.constantBufferCounts[i] != count)
++        {
++            first = std::min(first, i);
++            last = i;
++        }
++    }
++    if (first == UINT32_MAX)
++        return;
++
++    if (ranges)
++        (m_D3DContext1.Get()->*c_SetConstantBuffers1[stage])(first, last - first + 1, buffers + first, offsets + first, counts + first);
++    else
++        (m_D3DContext.Get()->*c_SetConstantBuffers[stage])(first, last - first + 1, buffers + first);
++    for (uint32_t i = first; i <= last; i++)
++    {
++        bound.constantBuffers[i] = buffers[i];
++        bound.constantBufferOffsets[i] = ranges ? offsets[i] : 0;
++        bound.constantBufferCounts[i] = ranges ? counts[i] : 0;
++    }
++}
++
++void CommandList::bindStageShaderResources(uint32_t stage, uint32_t minSlot, uint32_t maxSlot, ID3D11ShaderResourceView* const* views) const
++{
++    BoundStage& bound = m_BoundStages[stage];
++    uint32_t first, last;
++    if (!changedSlots(bound.SRVs, views, minSlot, maxSlot, first, last))
++        return;
++    (m_D3DContext.Get()->*c_SetShaderResources[stage])(first, last - first + 1, views + first);
++    std::copy(views + first, views + last + 1, bound.SRVs + first);
++}
++
++void CommandList::bindStageSamplers(uint32_t stage, uint32_t minSlot, uint32_t maxSlot, ID3D11SamplerState* const* samplers) const
++{
++    BoundStage& bound = m_BoundStages[stage];
++    uint32_t first, last;
++    if (!changedSlots(bound.samplers, samplers, minSlot, maxSlot, first, last))
++        return;
++    (m_D3DContext.Get()->*c_SetSamplers[stage])(first, last - first + 1, samplers + first);
++    std::copy(samplers + first, samplers + last + 1, bound.samplers + first);
++}
++
++void CommandList::bindStageSet(uint32_t stage, const BindingSet* set) const
++{
++    const bool whole = set->wholeConstantBuffers;
++    bindStageConstantBuffers(stage, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, whole ? nullptr : set->constantBufferOffsets, whole ? nullptr : set->constantBufferCounts);
++    bindStageShaderResources(stage, set->minSRVSlot, set->maxSRVSlot, set->SRVs);
++    bindStageSamplers(stage, set->minSamplerSlot, set->maxSamplerSlot, set->samplers);
++}
++
+ #define D3D11_SET_ARRAY(method, min, max, array) \
+         if ((max) >= (min)) \
+             m_D3DContext->method(min, ((max) - (min) + 1), &(array)[min])
+@@ -314,39 +412,14 @@ void CommandList::prepareToBindGraphicsResourceSets(
+ 
+             ShaderType stagesToUnbind = set->visibility & currentPipeline->shaderMask;
+ 
+-            if ((stagesToUnbind & ShaderType::Vertex) != 0)
+-            {
+-                D3D11_SET_ARRAY(VSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, NullCBs);
+-                D3D11_SET_ARRAY(VSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, NullSRVs);
+-                D3D11_SET_ARRAY(VSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, NullSamplers);
+-            }
+-
+-            if ((stagesToUnbind & ShaderType::Hull) != 0)
+-            {
+-                D3D11_SET_ARRAY(HSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, NullCBs);
+-                D3D11_SET_ARRAY(HSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, NullSRVs);
+-                D3D11_SET_ARRAY(HSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, NullSamplers);
+-            }
+-
+-            if ((stagesToUnbind & ShaderType::Domain) != 0)
+-            {
+-                D3D11_SET_ARRAY(DSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, NullCBs);
+-                D3D11_SET_ARRAY(DSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, NullSRVs);
+-                D3D11_SET_ARRAY(DSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, NullSamplers);
+-            }
+-
+-            if ((stagesToUnbind & ShaderType::Geometry) != 0)
++            // only the slots still bound
++            for (uint32_t stage = 0; stage < std::size(c_GraphicsStages); stage++)
+             {
+-                D3D11_SET_ARRAY(GSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, NullCBs);
+-                D3D11_SET_ARRAY(GSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, NullSRVs);
+-                D3D11_SET_ARRAY(GSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, NullSamplers);
+-            }
+-
+-            if ((stagesToUnbind & ShaderType::Pixel) != 0)
+-            {
+-                D3D11_SET_ARRAY(PSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, NullCBs);
+-                D3D11_SET_ARRAY(PSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, NullSRVs);
+-                D3D11_SET_ARRAY(PSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, NullSamplers);
++                if ((stagesToUnbind & c_GraphicsStages[stage]) == 0)
++                    continue;
++                bindStageConstantBuffers(stage, set->minConstantBufferSlot, set->maxConstantBufferSlot, NullCBs, nullptr, nullptr);
++                bindStageShaderResources(stage, set->minSRVSlot, set->maxSRVSlot, NullSRVs);
++                bindStageSamplers(stage, set->minSamplerSlot, set->maxSamplerSlot, NullSamplers);
+             }
+         }
+     }
+@@ -367,74 +440,11 @@ void CommandList::bindGraphicsResourceSets(
+ 
+         ShaderType stagesToBind = set->visibility & pipeline->shaderMask;
+ 
+-        if ((stagesToBind & ShaderType::Vertex) != 0)
+-        {
+-            if (m_D3DContext1)
+-            {
+-                D3D11_SET_ARRAY1(VSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+-            }
+-            else
+-            {
+-                D3D11_SET_ARRAY(VSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers);
+-            }
+-            D3D11_SET_ARRAY(VSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, set->SRVs);
+-            D3D11_SET_ARRAY(VSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, set->samplers);
+-        }
+-
+-        if ((stagesToBind & ShaderType::Hull) != 0)
++        // only the slots that differ from what the stage has bound
++        for (uint32_t stage = 0; stage < std::size(c_GraphicsStages); stage++)
+         {
+-            if (m_D3DContext1)
+-            {
+-                D3D11_SET_ARRAY1(HSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+-            }
+-            else
+-            {
+-                D3D11_SET_ARRAY(HSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers);
+-            }
+-            D3D11_SET_ARRAY(HSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, set->SRVs);
+-            D3D11_SET_ARRAY(HSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, set->samplers);
+-        }
+-
+-        if ((stagesToBind & ShaderType::Domain) != 0)
+-        {
+-            if (m_D3DContext1)
+-            {
+-                D3D11_SET_ARRAY1(DSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+-            }
+-            else
+-            {
+-                D3D11_SET_ARRAY(DSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers);
+-            }
+-            D3D11_SET_ARRAY(DSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, set->SRVs);
+-            D3D11_SET_ARRAY(DSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, set->samplers);
+-        }
+-
+-        if ((stagesToBind & ShaderType::Geometry) != 0)
+-        {
+-            if (m_D3DContext1)
+-            {
+-                D3D11_SET_ARRAY1(GSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+-            }
+-            else
+-            {
+-                D3D11_SET_ARRAY(GSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers);
+-            }
+-            D3D11_SET_ARRAY(GSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, set->SRVs);
+-            D3D11_SET_ARRAY(GSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, set->samplers);
+-        }
+-
+-        if ((stagesToBind & ShaderType::Pixel) != 0)
+-        {
+-            if (m_D3DContext1)
+-            {
+-                D3D11_SET_ARRAY1(PSSetConstantBuffers1, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers, set->constantBufferOffsets, set->constantBufferCounts);
+-            }
+-            else
+-            {
+-                D3D11_SET_ARRAY(PSSetConstantBuffers, set->minConstantBufferSlot, set->maxConstantBufferSlot, set->constantBuffers);
+-            }
+-            D3D11_SET_ARRAY(PSSetShaderResources, set->minSRVSlot, set->maxSRVSlot, set->SRVs);
+-            D3D11_SET_ARRAY(PSSetSamplers, set->minSamplerSlot, set->maxSamplerSlot, set->samplers);
++            if ((stagesToBind & c_GraphicsStages[stage]) != 0)
++                bindStageSet(stage, set);
+         }
+     }
+ }

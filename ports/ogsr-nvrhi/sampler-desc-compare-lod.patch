@@ -1,0 +1,116 @@
+diff --git a/include/nvrhi/common/resource.h b/include/nvrhi/common/resource.h
+index df693f8..ea722a0 100644
+--- a/include/nvrhi/common/resource.h
++++ b/include/nvrhi/common/resource.h
+@@ -51,6 +51,7 @@ namespace nvrhi
+         constexpr ObjectType D3D11_DepthStencilView                 = 0x00010006;
+         constexpr ObjectType D3D11_ShaderResourceView               = 0x00010007;
+         constexpr ObjectType D3D11_UnorderedAccessView              = 0x00010008;
++        constexpr ObjectType D3D11_SamplerState                     = 0x00010009;
+ 
+         constexpr ObjectType D3D12_Device                           = 0x00020001;
+         constexpr ObjectType D3D12_CommandQueue                     = 0x00020002;
+diff --git a/include/nvrhi/nvrhi.h b/include/nvrhi/nvrhi.h
+index cd5b791..7b920b0 100644
+--- a/include/nvrhi/nvrhi.h
++++ b/include/nvrhi/nvrhi.h
+@@ -1340,6 +1340,12 @@ namespace nvrhi
+         SamplerAddressMode addressV = SamplerAddressMode::Clamp;
+         SamplerAddressMode addressW = SamplerAddressMode::Clamp;
+         SamplerReductionType reductionType = SamplerReductionType::Standard;
++        // D3D11 / D3D12: the comparison function of comparison samplers and the LOD clamp (the defaults are what the backends used before)
++        ComparisonFunc comparisonFunc = ComparisonFunc::Less;
++        float minLod = 0.f;
++        float maxLod = 3.402823466e+38f;
++        // D3D11 / D3D12: the anisotropic filter also at maxAnisotropy 1 (else it is used only above 1)
++        bool anisotropicFilter = false;
+ 
+         SamplerDesc& setBorderColor(const Color& color) { borderColor = color; return *this; }
+         SamplerDesc& setMaxAnisotropy(float value) { maxAnisotropy = value; return *this; }
+@@ -1353,6 +1359,10 @@ namespace nvrhi
+         SamplerDesc& setAddressW(SamplerAddressMode mode) { addressW = mode; return *this; }
+         SamplerDesc& setAllAddressModes(SamplerAddressMode mode) { addressU = addressV = addressW = mode; return *this; }
+         SamplerDesc& setReductionType(SamplerReductionType type) { reductionType = type; return *this; }
++        SamplerDesc& setComparisonFunc(ComparisonFunc value) { comparisonFunc = value; return *this; }
++        SamplerDesc& setMinLod(float value) { minLod = value; return *this; }
++        SamplerDesc& setMaxLod(float value) { maxLod = value; return *this; }
++        SamplerDesc& setAnisotropicFilter(bool enable) { anisotropicFilter = enable; return *this; }
+     };
+ 
+     class ISampler : public IResource
+diff --git a/src/d3d11/d3d11-backend.h b/src/d3d11/d3d11-backend.h
+index 53072b5..434db6c 100644
+--- a/src/d3d11/d3d11-backend.h
++++ b/src/d3d11/d3d11-backend.h
+@@ -157,8 +157,9 @@ namespace nvrhi::d3d11
+     public:
+         SamplerDesc desc;
+         RefCountPtr<ID3D11SamplerState> sampler;
+-        
++
+         const SamplerDesc& getDesc() const override { return desc; }
++        Object getNativeObject(ObjectType objectType) override { return objectType == ObjectTypes::D3D11_SamplerState ? Object(sampler.Get()) : nullptr; }
+     };
+ 
+     class EventQuery : public RefCounter<IEventQuery>
+diff --git a/src/d3d11/d3d11-device.cpp b/src/d3d11/d3d11-device.cpp
+index 58096b0..6dc7b8e 100644
+--- a/src/d3d11/d3d11-device.cpp
++++ b/src/d3d11/d3d11-device.cpp
+@@ -418,7 +418,7 @@ namespace nvrhi::d3d11
+ 
+         UINT reductionType = convertSamplerReductionType(d.reductionType);
+ 
+-        if (d.maxAnisotropy > 1.0f)
++        if (d.maxAnisotropy > 1.0f || d.anisotropicFilter)
+         {
+             desc11.Filter = D3D11_ENCODE_ANISOTROPIC_FILTER(reductionType);
+         }
+@@ -437,13 +437,13 @@ namespace nvrhi::d3d11
+ 
+         desc11.MipLODBias = d.mipBias;
+         desc11.MaxAnisotropy = std::max((UINT)d.maxAnisotropy, 1U);
+-        desc11.ComparisonFunc = D3D11_COMPARISON_LESS;
++        desc11.ComparisonFunc = convertComparisonFunc(d.comparisonFunc);
+         desc11.BorderColor[0] = d.borderColor.r;
+         desc11.BorderColor[1] = d.borderColor.g;
+         desc11.BorderColor[2] = d.borderColor.b;
+         desc11.BorderColor[3] = d.borderColor.a;
+-        desc11.MinLOD = 0;
+-        desc11.MaxLOD = D3D11_FLOAT32_MAX;
++        desc11.MinLOD = d.minLod;
++        desc11.MaxLOD = d.maxLod;
+ 
+         RefCountPtr<ID3D11SamplerState> sState;
+         const HRESULT res = m_Context.device->CreateSamplerState(&desc11, &sState);
+diff --git a/src/d3d12/d3d12-device.cpp b/src/d3d12/d3d12-device.cpp
+index 9e7cbb7..9ca544e 100644
+--- a/src/d3d12/d3d12-device.cpp
++++ b/src/d3d12/d3d12-device.cpp
+@@ -544,7 +544,7 @@ namespace nvrhi::d3d12
+     {
+         UINT reductionType = convertSamplerReductionType(desc.reductionType);
+ 
+-        if (m_Desc.maxAnisotropy > 1.0f)
++        if (m_Desc.maxAnisotropy > 1.0f || m_Desc.anisotropicFilter)
+         {
+             m_d3d12desc.Filter = D3D12_ENCODE_ANISOTROPIC_FILTER(reductionType);
+         }
+@@ -564,14 +564,14 @@ namespace nvrhi::d3d12
+         m_d3d12desc.MipLODBias = m_Desc.mipBias;
+         m_d3d12desc.MaxAnisotropy = std::max((UINT)m_Desc.maxAnisotropy, 1U);
+         m_d3d12desc.ComparisonFunc = desc.reductionType == SamplerReductionType::Comparison
+-            ? D3D12_COMPARISON_FUNC_LESS
++            ? convertComparisonFunc(desc.comparisonFunc)
+             : D3D12_COMPARISON_FUNC_NEVER;
+         m_d3d12desc.BorderColor[0] = m_Desc.borderColor.r;
+         m_d3d12desc.BorderColor[1] = m_Desc.borderColor.g;
+         m_d3d12desc.BorderColor[2] = m_Desc.borderColor.b;
+         m_d3d12desc.BorderColor[3] = m_Desc.borderColor.a;
+-        m_d3d12desc.MinLOD = 0;
+-        m_d3d12desc.MaxLOD = D3D12_FLOAT32_MAX;
++        m_d3d12desc.MinLOD = m_Desc.minLod;
++        m_d3d12desc.MaxLOD = m_Desc.maxLod;
+     }
+     
+     void Sampler::createDescriptor(size_t descriptor) const

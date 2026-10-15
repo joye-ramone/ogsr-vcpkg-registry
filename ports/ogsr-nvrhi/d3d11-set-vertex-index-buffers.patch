@@ -1,0 +1,127 @@
+diff --git a/include/nvrhi/d3d11.h b/include/nvrhi/d3d11.h
+index 2dd1d94..3f82c36 100644
+--- a/include/nvrhi/d3d11.h
++++ b/include/nvrhi/d3d11.h
+@@ -63,4 +63,10 @@ namespace nvrhi::d3d11
+     // Forget what the command list believes is bound (no D3D11 call): the next setGraphicsState / setComputeState binds everything. For
+     // native D3D11 calls on the list's context that change bindings
+     NVRHI_API void invalidateState(ICommandList* commandList);
++
++    // The vertex and index buffers of the next draw when nothing else of the graphics state changed since the last setGraphicsState: binds what
++    // differs and updates the list's state cache, as setGraphicsState with the same state but these buffers would. The caller passes the
++    // buffers' D3D11 resources (no lookup through the buffers). False, nothing done: the list has no valid graphics state (call setGraphicsState)
++    NVRHI_API bool setVertexIndexBuffers(ICommandList* commandList, const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, ID3D11Buffer* const* vertexBufferResources,
++        const IndexBufferBinding& indexBuffer, ID3D11Buffer* indexBufferResource);
+ }
+diff --git a/src/d3d11/d3d11-backend.h b/src/d3d11/d3d11-backend.h
+index 3a7c202..717d43b 100644
+--- a/src/d3d11/d3d11-backend.h
++++ b/src/d3d11/d3d11-backend.h
+@@ -310,6 +310,9 @@ namespace nvrhi::d3d11
+         RefCountPtr<ID3D11CommandList> takeRecordedCommands();
+         // forgets the cached state without touching the context: the immediate list after ExecuteCommandList cleared its context
+         void resetStateCache();
++        // nvrhi::d3d11::setVertexIndexBuffers
++        bool setVertexIndexBuffers(const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, ID3D11Buffer* const* vertexBufferResources,
++            const IndexBufferBinding& indexBuffer, ID3D11Buffer* indexBufferResource);
+ 
+         // IResource implementation
+ 
+diff --git a/src/d3d11/d3d11-commandlist.cpp b/src/d3d11/d3d11-commandlist.cpp
+index 9576e9b..ff8cdb1 100644
+--- a/src/d3d11/d3d11-commandlist.cpp
++++ b/src/d3d11/d3d11-commandlist.cpp
+@@ -70,6 +70,13 @@ namespace nvrhi::d3d11
+             list->resetStateCache();
+     }
+ 
++    bool setVertexIndexBuffers(ICommandList* commandList, const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, ID3D11Buffer* const* vertexBufferResources,
++        const IndexBufferBinding& indexBuffer, ID3D11Buffer* indexBufferResource)
++    {
++        auto* list = static_cast<CommandList*>(commandList->getNativeObject(ObjectTypes::Nvrhi_D3D11_CommandList).pointer);
++        return list && list->setVertexIndexBuffers(vertexBuffers, vertexBufferCount, vertexBufferResources, indexBuffer, indexBufferResource);
++    }
++
+     void CommandList::open()
+     {
+         // a deferred list that was closed but never executed drops its commands
+diff --git a/src/d3d11/d3d11-graphics.cpp b/src/d3d11/d3d11-graphics.cpp
+index 476040e..e2b7108 100644
+--- a/src/d3d11/d3d11-graphics.cpp
++++ b/src/d3d11/d3d11-graphics.cpp
+@@ -465,6 +465,75 @@ namespace nvrhi::d3d11
+         }
+     }
+ 
++    bool CommandList::setVertexIndexBuffers(const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, ID3D11Buffer* const* vertexBufferResources,
++        const IndexBufferBinding& indexBuffer, ID3D11Buffer* indexBufferResource)
++    {
++        if (!m_CurrentGraphicsStateValid || m_CurrentComputeStateValid || vertexBufferCount > c_MaxVertexAttributes)
++            return false;
++
++        // as setGraphicsState's vertex / index buffer part, with the D3D11 resources given
++        bool updateVertexBuffers = vertexBufferCount != m_CurrentVertexBufferBindings.size();
++        for (uint32_t i = 0; i < vertexBufferCount && !updateVertexBuffers; i++)
++        {
++            const VertexBufferBinding& binding = vertexBuffers[i];
++            updateVertexBuffers = binding.slot >= c_MaxVertexAttributes || binding != m_CurrentVertexBufferBindings[i] ||
++                m_CurrentVertexBufferResources[binding.slot] != vertexBufferResources[i];
++        }
++        if (updateVertexBuffers)
++        {
++            ID3D11Buffer* pVertexBuffers[c_MaxVertexAttributes] = {};
++            UINT pVertexBufferStrides[c_MaxVertexAttributes] = {};
++            UINT pVertexBufferOffsets[c_MaxVertexAttributes] = {};
++            uint32_t maxVbIndex = 0;
++
++            const InputLayout* inputLayout = checked_cast<GraphicsPipeline*>(m_CurrentGraphicsPipeline.Get())->inputLayout;
++            for (uint32_t i = 0; i < vertexBufferCount; i++)
++            {
++                const VertexBufferBinding& binding = vertexBuffers[i];
++                if (binding.slot >= c_MaxVertexAttributes)
++                    continue;
++
++                pVertexBuffers[binding.slot] = vertexBufferResources[i];
++                if (binding.stride)
++                    pVertexBufferStrides[binding.slot] = binding.stride;
++                else if (inputLayout)
++                {
++                    const auto stride = inputLayout->elementStrides.find(binding.slot);
++                    pVertexBufferStrides[binding.slot] = stride != inputLayout->elementStrides.end() ? stride->second : 0;
++                }
++                pVertexBufferOffsets[binding.slot] = UINT(binding.offset);
++                maxVbIndex = std::max(maxVbIndex, binding.slot);
++            }
++            for (const VertexBufferBinding& binding : m_CurrentVertexBufferBindings)
++            {
++                if (binding.slot < c_MaxVertexAttributes)
++                    maxVbIndex = std::max(maxVbIndex, binding.slot);
++            }
++
++            m_D3DContext->IASetVertexBuffers(0, maxVbIndex + 1, pVertexBuffers, pVertexBufferStrides, pVertexBufferOffsets);
++
++            m_CurrentVertexBufferBindings.resize(vertexBufferCount);
++            std::fill(std::begin(m_CurrentVertexBufferResources), std::end(m_CurrentVertexBufferResources), nullptr);
++            for (uint32_t i = 0; i < vertexBufferCount; i++)
++            {
++                m_CurrentVertexBufferBindings[i] = vertexBuffers[i];
++                if (vertexBuffers[i].slot < c_MaxVertexAttributes)
++                    m_CurrentVertexBufferResources[vertexBuffers[i].slot] = vertexBufferResources[i];
++            }
++        }
++
++        if (m_CurrentIndexBufferBinding != indexBuffer || m_CurrentIndexBufferResource != indexBufferResource)
++        {
++            if (indexBuffer.buffer)
++                m_D3DContext->IASetIndexBuffer(indexBufferResource, getDxgiFormatMapping(indexBuffer.format).srvFormat, indexBuffer.offset);
++            else
++                m_D3DContext->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
++            m_CurrentIndexBufferBinding = indexBuffer;
++            m_CurrentIndexBufferResource = indexBufferResource;
++        }
++        return true;
++    }
++
+     void CommandList::draw(const DrawArguments& args)
+     {
+         m_D3DContext->DrawInstanced(args.vertexCount, args.instanceCount, args.startVertexLocation, args.startInstanceLocation);

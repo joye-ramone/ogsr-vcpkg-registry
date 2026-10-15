@@ -1,0 +1,17 @@
+diff --git a/src/d3d12/d3d12-constants.cpp b/src/d3d12/d3d12-constants.cpp
+index 1d6ccc6..21d6362 100644
+--- a/src/d3d12/d3d12-constants.cpp
++++ b/src/d3d12/d3d12-constants.cpp
+@@ -24,6 +24,12 @@
+ 
+ namespace nvrhi::d3d12
+ {
++#if !NVRHI_D3D12_WITH_COOP_VECTOR_COMMON
++    // Release DirectX-Headers (1.619) have no linear algebra sync scope; it is only paired with the cooperative vector states,
++    // which need the preview headers anyway
++    static constexpr D3D12_BARRIER_SYNC D3D12_BARRIER_SYNC_CONVERT_LINEAR_ALGEBRA_MATRIX = D3D12_BARRIER_SYNC_NONE;
++#endif
++
+     DXGI_FORMAT convertFormat(nvrhi::Format format)
+     {
+         return getDxgiFormatMapping(format).srvFormat;

@@ -1,0 +1,7 @@
+ogsr-nvrhi provides NVRHI as static libraries (no CMake config is installed):
+
+    include:  <nvrhi/nvrhi.h>, <nvrhi/d3d11.h>, <nvrhi/d3d12.h>, <nvrhi/validation.h>, <nvrhi/utils.h>
+    libs:     nvrhi.lib, nvrhi_d3d11.lib, nvrhi_d3d12.lib (+ d3d11.lib, d3d12.lib, dxguid.lib from the Windows SDK,
+              DirectX-Guids.lib from directx-headers for the D3D12 backend)
+
+With MSBuild's vcpkg integration the libraries are linked automatically.

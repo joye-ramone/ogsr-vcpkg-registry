@@ -1,0 +1,29 @@
+diff --git a/src/d3d11/d3d11-resource-bindings.cpp b/src/d3d11/d3d11-resource-bindings.cpp
+index 8803b0c..91bd80e 100644
+--- a/src/d3d11/d3d11-resource-bindings.cpp
++++ b/src/d3d11/d3d11-resource-bindings.cpp
+@@ -364,6 +364,24 @@ void CommandList::prepareToBindGraphicsResourceSets(
+         const GraphicsPipeline* currentPipeline = checked_cast<const GraphicsPipeline*>(_currentPipeline);
+         const GraphicsPipeline* newPipeline = checked_cast<const GraphicsPipeline*>(_newPipeline);
+ 
++        // every set the same as the bound one at its index or one of the same layout (it covers the same slots, null items included): nothing
++        // to unbind, the changed sets bind (their slots that differ). The general case below compares every pair, superset tests on the sets
++        if (!updateFramebuffer && currentPipeline->shaderMask == newPipeline->shaderMask && currentResourceSets->size() == resourceSets.size())
++        {
++            bool sameLayouts = true;
++            for (uint32_t i = 0; i < uint32_t(resourceSets.size()) && sameLayouts; i++)
++            {
++                IBindingSet* current = (*currentResourceSets)[i];
++                if (resourceSets[i] == current)
++                    outSetsToBind[i] = nullptr;
++                else
++                    sameLayouts = resourceSets[i] && current && resourceSets[i]->getLayout() == current->getLayout();
++            }
++            if (sameLayouts)
++                return;
++            outSetsToBind = resourceSets;
++        }
++
+         BindingSetVector setsToUnbind;
+         
+         for (const BindingSetHandle& bindingSet : *currentResourceSets)

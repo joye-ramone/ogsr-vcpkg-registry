@@ -1,0 +1,130 @@
+diff --git a/include/nvrhi/d3d11.h b/include/nvrhi/d3d11.h
+index 2afe105..2dd1d94 100644
+--- a/include/nvrhi/d3d11.h
++++ b/include/nvrhi/d3d11.h
+@@ -33,6 +33,7 @@
+ namespace nvrhi::ObjectTypes
+ {
+     constexpr ObjectType Nvrhi_D3D11_Device = 0x00010101;
++    constexpr ObjectType Nvrhi_D3D11_CommandList = 0x00010102;
+ };
+ 
+ namespace nvrhi::d3d11
+@@ -52,4 +53,14 @@ namespace nvrhi::d3d11
+     // (bytecode: kept for createInputLayout, may be null), an input layout with the attributes it was made from (their elementStride per slot)
+     NVRHI_API ShaderHandle createShaderHandleForNative(const ShaderDesc& desc, ID3D11DeviceChild* shader, const void* bytecode, size_t bytecodeSize);
+     NVRHI_API InputLayoutHandle createInputLayoutHandleForNative(ID3D11InputLayout* layout, const VertexAttributeDesc* attributes, uint32_t attributeCount);
++
++    // A graphics pipeline over the application's own D3D11 state objects and topology: desc.renderState (except
++    // depthStencilState.dynamicStencilRef / stencilRefValue, used as usual) and desc.primType are not converted; shaders, input layout and
++    // binding layouts come from desc. The pipeline holds references to the state objects
++    NVRHI_API GraphicsPipelineHandle createGraphicsPipelineForNative(const GraphicsPipelineDesc& desc, const FramebufferInfo& fbinfo, D3D11_PRIMITIVE_TOPOLOGY topology, ID3D11RasterizerState* rs,
++        ID3D11BlendState* bs, ID3D11DepthStencilState* dss);
++
++    // Forget what the command list believes is bound (no D3D11 call): the next setGraphicsState / setComputeState binds everything. For
++    // native D3D11 calls on the list's context that change bindings
++    NVRHI_API void invalidateState(ICommandList* commandList);
+ }
+diff --git a/src/d3d11/d3d11-backend.h b/src/d3d11/d3d11-backend.h
+index 434db6c..4145bf0 100644
+--- a/src/d3d11/d3d11-backend.h
++++ b/src/d3d11/d3d11-backend.h
+@@ -230,6 +230,11 @@ namespace nvrhi::d3d11
+         bool requiresBlendFactor = false;
+         bool pixelShaderHasUAVs = false;
+ 
++        // createGraphicsPipelineForNative: the application's state objects that pRS / pBlendState / pDepthStencilState point to
++        RefCountPtr<ID3D11RasterizerState> nativeRS;
++        RefCountPtr<ID3D11BlendState> nativeBlendState;
++        RefCountPtr<ID3D11DepthStencilState> nativeDepthStencilState;
++
+         RefCountPtr<ID3D11VertexShader> pVS;
+         RefCountPtr<ID3D11HullShader> pHS;
+         RefCountPtr<ID3D11DomainShader> pDS;
+diff --git a/src/d3d11/d3d11-commandlist.cpp b/src/d3d11/d3d11-commandlist.cpp
+index c7d00d3..2f2f3a0 100644
+--- a/src/d3d11/d3d11-commandlist.cpp
++++ b/src/d3d11/d3d11-commandlist.cpp
+@@ -54,11 +54,21 @@ namespace nvrhi::d3d11
+         {
+         case ObjectTypes::D3D11_DeviceContext:
+             return Object(m_D3DContext);
++        case ObjectTypes::Nvrhi_D3D11_CommandList:
++            return Object(this);
+         default:
+             return nullptr;
+         }
+     }
+ 
++    void invalidateState(ICommandList* commandList)
++    {
++        // through getNativeObject: the validation layer's wrapper forwards it to the backend's list
++        auto* list = static_cast<CommandList*>(commandList->getNativeObject(ObjectTypes::Nvrhi_D3D11_CommandList).pointer);
++        if (list)
++            list->resetStateCache();
++    }
++
+     void CommandList::open()
+     {
+         // a deferred list that was closed but never executed drops its commands
+diff --git a/src/d3d11/d3d11-graphics.cpp b/src/d3d11/d3d11-graphics.cpp
+index 5d9b95a..560703c 100644
+--- a/src/d3d11/d3d11-graphics.cpp
++++ b/src/d3d11/d3d11-graphics.cpp
+@@ -104,6 +104,56 @@ namespace nvrhi::d3d11
+         return GraphicsPipelineHandle::Create(pso);
+     }
+ 
++    GraphicsPipelineHandle createGraphicsPipelineForNative(const GraphicsPipelineDesc& desc, const FramebufferInfo& fbinfo, const D3D11_PRIMITIVE_TOPOLOGY topology, ID3D11RasterizerState* rs,
++        ID3D11BlendState* bs, ID3D11DepthStencilState* dss)
++    {
++        if (!rs || !bs || !dss)
++            return nullptr;
++
++        GraphicsPipeline *pso = new GraphicsPipeline();
++        pso->desc = desc;
++        pso->framebufferInfo = fbinfo;
++        pso->primitiveTopology = topology;
++        pso->inputLayout = checked_cast<InputLayout*>(desc.inputLayout.Get());
++
++        pso->nativeRS = rs;
++        pso->nativeBlendState = bs;
++        pso->nativeDepthStencilState = dss;
++        pso->pRS = rs;
++        pso->pBlendState = bs;
++        pso->pDepthStencilState = dss;
++
++        // the blend factor is applied with the pipeline and, when a target blends with it, whenever it changes
++        D3D11_BLEND_DESC blend{};
++        bs->GetDesc(&blend);
++        const auto usesFactor = [](const D3D11_BLEND b) { return b == D3D11_BLEND_BLEND_FACTOR || b == D3D11_BLEND_INV_BLEND_FACTOR; };
++        for (uint32_t i = 0; i < (blend.IndependentBlendEnable ? c_MaxRenderTargets : 1u); i++)
++        {
++            const D3D11_RENDER_TARGET_BLEND_DESC& t = blend.RenderTarget[i];
++            if (t.BlendEnable && (usesFactor(t.SrcBlend) || usesFactor(t.DestBlend) || usesFactor(t.SrcBlendAlpha) || usesFactor(t.DestBlendAlpha)))
++                pso->requiresBlendFactor = true;
++        }
++
++        pso->shaderMask = ShaderType::None;
++        if (desc.VS) { pso->pVS = checked_cast<Shader*>(desc.VS.Get())->VS; pso->shaderMask = pso->shaderMask | ShaderType::Vertex; }
++        if (desc.HS) { pso->pHS = checked_cast<Shader*>(desc.HS.Get())->HS; pso->shaderMask = pso->shaderMask | ShaderType::Hull; }
++        if (desc.DS) { pso->pDS = checked_cast<Shader*>(desc.DS.Get())->DS; pso->shaderMask = pso->shaderMask | ShaderType::Domain; }
++        if (desc.GS) { pso->pGS = checked_cast<Shader*>(desc.GS.Get())->GS; pso->shaderMask = pso->shaderMask | ShaderType::Geometry; }
++        if (desc.PS) { pso->pPS = checked_cast<Shader*>(desc.PS.Get())->PS; pso->shaderMask = pso->shaderMask | ShaderType::Pixel; }
++
++        for (auto& _layout : desc.bindingLayouts)
++        {
++            BindingLayout* layout = checked_cast<BindingLayout*>(_layout.Get());
++            if ((layout->desc.visibility & ShaderType::Pixel) == 0)
++                continue;
++            for (const auto& item : layout->desc.bindings)
++                if (item.type == ResourceType::TypedBuffer_UAV || item.type == ResourceType::Texture_UAV || item.type == ResourceType::StructuredBuffer_UAV)
++                    pso->pixelShaderHasUAVs = true;
++        }
++
++        return GraphicsPipelineHandle::Create(pso);
++    }
++
+     GraphicsPipelineHandle Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc, IFramebuffer* fb)
+     {
+         if (!fb)

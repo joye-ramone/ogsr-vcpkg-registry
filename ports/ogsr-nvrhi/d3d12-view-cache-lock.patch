@@ -1,0 +1,50 @@
+diff --git a/src/d3d12/d3d12-backend.h b/src/d3d12/d3d12-backend.h
+index c8c262d..ac1e83e 100644
+--- a/src/d3d12/d3d12-backend.h
++++ b/src/d3d12/d3d12-backend.h
+@@ -331,6 +331,8 @@ namespace nvrhi::d3d12
+         TextureBindingKey_HashMap<DescriptorIndex> m_CustomSRVs;
+         TextureBindingKey_HashMap<DescriptorIndex> m_CustomUAVs;
+         std::vector<DescriptorIndex> m_ClearMipLevelUAVs;
++        // the view caches above are filled on first use: command lists recorded on several threads (clears of slices of one texture) take it
++        std::mutex m_ViewMutex;
+     };
+ 
+     class Buffer : public RefCounter<IBuffer>, public BufferStateExtension
+diff --git a/src/d3d12/d3d12-texture.cpp b/src/d3d12/d3d12-texture.cpp
+index 63b595c..a92537e 100644
+--- a/src/d3d12/d3d12-texture.cpp
++++ b/src/d3d12/d3d12-texture.cpp
+@@ -48,6 +48,8 @@ namespace nvrhi::d3d12
+     {
+         static_assert(sizeof(void*) == sizeof(D3D12_CPU_DESCRIPTOR_HANDLE), "Cannot typecast a descriptor to void*");
+ 
++        std::lock_guard lock(m_ViewMutex);
++
+         switch (objectType)
+         {
+         case nvrhi::ObjectTypes::D3D12_ShaderResourceViewGpuDescriptor: {
+@@ -560,6 +562,8 @@ namespace nvrhi::d3d12
+     {
+         assert(desc.isUAV);
+ 
++        std::lock_guard lock(m_ViewMutex);
++
+         DescriptorIndex descriptorIndex = m_ClearMipLevelUAVs[mipLevel];
+ 
+         if (descriptorIndex != c_InvalidDescriptorIndex)
+diff --git a/src/d3d12/d3d12-upload.cpp b/src/d3d12/d3d12-upload.cpp
+index 4314f67..468f483 100644
+--- a/src/d3d12/d3d12-upload.cpp
++++ b/src/d3d12/d3d12-upload.cpp
+@@ -225,6 +225,10 @@ namespace nvrhi::d3d12
+             {
+                 m_CurrentChunk = createChunk(sizeToAllocate);
+             }
++
++            // the chunk's buffer was not created (the device was removed, out of memory)
++            if (!m_CurrentChunk)
++                return false;
+         }
+ 
+         m_CurrentChunk->version = currentVersion;

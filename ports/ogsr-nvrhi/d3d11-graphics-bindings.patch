@@ -1,0 +1,108 @@
+diff --git a/include/nvrhi/d3d11.h b/include/nvrhi/d3d11.h
+index 3f82c36..eda0f53 100644
+--- a/include/nvrhi/d3d11.h
++++ b/include/nvrhi/d3d11.h
+@@ -64,6 +64,31 @@ namespace nvrhi::d3d11
+     // native D3D11 calls on the list's context that change bindings
+     NVRHI_API void invalidateState(ICommandList* commandList);
+ 
++    // One graphics stage's constant buffers (bound whole), views and samplers from the caller's arrays, indexed by slot; [begin, end) of each
++    // kind is bound (begin == end: none)
++    struct StageBindings
++    {
++        ID3D11Buffer* const* constantBuffers = nullptr;
++        ID3D11ShaderResourceView* const* shaderResources = nullptr;
++        ID3D11SamplerState* const* samplers = nullptr;
++        uint32_t constantBufferBegin = 0;
++        uint32_t constantBufferEnd = 0;
++        uint32_t shaderResourceBegin = 0;
++        uint32_t shaderResourceEnd = 0;
++        uint32_t samplerBegin = 0;
++        uint32_t samplerEnd = 0;
++    };
++
++    // Binding without binding sets, for pipelines made without binding layouts (setGraphicsState then binds no sets): the stages in stageMask
++    // (bits in stages[] order: VS, HS, DS, GS, PS) bind the slots that differ from what the list has bound, and the list records them as it does
++    // for sets, so later calls and setGraphicsState see them. Call after setGraphicsState (a switch from compute clears the context). False,
++    // nothing done: the list is in compute state
++    NVRHI_API bool setGraphicsBindings(ICommandList* commandList, const StageBindings* stages, uint32_t stageMask);
++
++    // True while the list holds the graphics state of its last setGraphicsState (no reset, clear or compute state since): a draw that changes
++    // nothing of it can follow without any state call
++    NVRHI_API bool hasGraphicsState(ICommandList* commandList);
++
+     // The vertex and index buffers of the next draw when nothing else of the graphics state changed since the last setGraphicsState: binds what
+     // differs and updates the list's state cache, as setGraphicsState with the same state but these buffers would. The caller passes the
+     // buffers' D3D11 resources (no lookup through the buffers). False, nothing done: the list has no valid graphics state (call setGraphicsState)
+diff --git a/src/d3d11/d3d11-backend.h b/src/d3d11/d3d11-backend.h
+index 717d43b..0e04dc0 100644
+--- a/src/d3d11/d3d11-backend.h
++++ b/src/d3d11/d3d11-backend.h
+@@ -313,6 +313,10 @@ namespace nvrhi::d3d11
+         // nvrhi::d3d11::setVertexIndexBuffers
+         bool setVertexIndexBuffers(const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, ID3D11Buffer* const* vertexBufferResources,
+             const IndexBufferBinding& indexBuffer, ID3D11Buffer* indexBufferResource);
++        // nvrhi::d3d11::setGraphicsBindings
++        bool setGraphicsBindings(const StageBindings* stages, uint32_t stageMask);
++        // nvrhi::d3d11::hasGraphicsState
++        bool hasGraphicsState() const { return m_CurrentGraphicsStateValid && !m_CurrentComputeStateValid; }
+ 
+         // IResource implementation
+ 
+diff --git a/src/d3d11/d3d11-commandlist.cpp b/src/d3d11/d3d11-commandlist.cpp
+index ff8cdb1..4647a56 100644
+--- a/src/d3d11/d3d11-commandlist.cpp
++++ b/src/d3d11/d3d11-commandlist.cpp
+@@ -70,6 +70,18 @@ namespace nvrhi::d3d11
+             list->resetStateCache();
+     }
+ 
++    bool setGraphicsBindings(ICommandList* commandList, const StageBindings* stages, uint32_t stageMask)
++    {
++        auto* list = static_cast<CommandList*>(commandList->getNativeObject(ObjectTypes::Nvrhi_D3D11_CommandList).pointer);
++        return list && list->setGraphicsBindings(stages, stageMask);
++    }
++
++    bool hasGraphicsState(ICommandList* commandList)
++    {
++        auto* list = static_cast<CommandList*>(commandList->getNativeObject(ObjectTypes::Nvrhi_D3D11_CommandList).pointer);
++        return list && list->hasGraphicsState();
++    }
++
+     bool setVertexIndexBuffers(ICommandList* commandList, const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, ID3D11Buffer* const* vertexBufferResources,
+         const IndexBufferBinding& indexBuffer, ID3D11Buffer* indexBufferResource)
+     {
+diff --git a/src/d3d11/d3d11-resource-bindings.cpp b/src/d3d11/d3d11-resource-bindings.cpp
+index 91bd80e..5f87329 100644
+--- a/src/d3d11/d3d11-resource-bindings.cpp
++++ b/src/d3d11/d3d11-resource-bindings.cpp
+@@ -340,6 +340,29 @@ void CommandList::bindStageSet(uint32_t stage, const BindingSet* set) const
+     bindStageSamplers(stage, set->minSamplerSlot, set->maxSamplerSlot, set->samplers);
+ }
+ 
++bool CommandList::setGraphicsBindings(const StageBindings* stages, uint32_t stageMask)
++{
++    if (m_CurrentComputeStateValid)
++        return false;
++
++    for (uint32_t stage = 0; stage < std::size(c_GraphicsStages); stage++)
++    {
++        if ((stageMask & (1u << stage)) == 0)
++            continue;
++        const StageBindings& b = stages[stage];
++        const uint32_t cbEnd = std::min(b.constantBufferEnd, uint32_t(D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT));
++        const uint32_t srvEnd = std::min(b.shaderResourceEnd, uint32_t(D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT));
++        const uint32_t samplerEnd = std::min(b.samplerEnd, uint32_t(D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT));
++        if (b.constantBufferBegin < cbEnd)
++            bindStageConstantBuffers(stage, b.constantBufferBegin, cbEnd - 1, b.constantBuffers, nullptr, nullptr);
++        if (b.shaderResourceBegin < srvEnd)
++            bindStageShaderResources(stage, b.shaderResourceBegin, srvEnd - 1, b.shaderResources);
++        if (b.samplerBegin < samplerEnd)
++            bindStageSamplers(stage, b.samplerBegin, samplerEnd - 1, b.samplers);
++    }
++    return true;
++}
++
+ #define D3D11_SET_ARRAY(method, min, max, array) \
+         if ((max) >= (min)) \
+             m_D3DContext->method(min, ((max) - (min) + 1), &(array)[min])

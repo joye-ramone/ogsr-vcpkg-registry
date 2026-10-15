@@ -1,0 +1,63 @@
+diff --git a/src/d3d11/d3d11-graphics.cpp b/src/d3d11/d3d11-graphics.cpp
+index 560703c..778e043 100644
+--- a/src/d3d11/d3d11-graphics.cpp
++++ b/src/d3d11/d3d11-graphics.cpp
+@@ -403,30 +403,42 @@ namespace nvrhi::d3d11
+             }
+         }
+ 
+-        m_CurrentIndirectBuffer = state.indirectParams;
++        if (m_CurrentIndirectBuffer != state.indirectParams)
++            m_CurrentIndirectBuffer = state.indirectParams;
++
++        // only what changed is recorded, element by element: a static_vector assignment copies its whole capacity (the viewport state is
++        // two arrays of 16, the vertex bindings 16), and most draws change only their vertex / index buffers
++        const auto copyUsed = [](auto& dst, const auto& src) {
++            dst.resize(src.size());
++            for (size_t i = 0; i < src.size(); i++)
++                dst[i] = src[i];
++        };
+ 
+         m_CurrentGraphicsStateValid = true;
+-        if (updatePipeline || updateFramebuffer || updateBindings || updateViewports || updateVertexBuffers || updateIndexBuffer || updateBlendState)
+-        {
++        if (updatePipeline)
+             m_CurrentGraphicsPipeline = state.pipeline;
++        if (updateFramebuffer)
+             m_CurrentFramebuffer = state.framebuffer;
+-            m_CurrentViewports = state.viewport;
++        if (updateViewports)
++        {
++            copyUsed(m_CurrentViewports.viewports, state.viewport.viewports);
++            copyUsed(m_CurrentViewports.scissorRects, state.viewport.scissorRects);
++        }
++        // OMSetBlendState above ran with this color
++        if (updatePipeline || updateBlendState)
+             m_CurrentBlendConstantColor = state.blendConstantColor;
+-
+-            m_CurrentBindings.resize(state.bindings.size());
+-            for(size_t i = 0; i < state.bindings.size(); i++)
+-            {
+-                m_CurrentBindings[i] = state.bindings[i];
+-            }
+-
+-            m_CurrentVertexBufferBindings = state.vertexBuffers;
+-            m_CurrentIndexBufferBinding = state.indexBuffer;
+-
++        if (updateBindings)
++            copyUsed(m_CurrentBindings, state.bindings);
++        if (updateVertexBuffers)
++        {
++            copyUsed(m_CurrentVertexBufferBindings, state.vertexBuffers);
+             m_CurrentVertexBuffers.resize(state.vertexBuffers.size());
+             for (size_t i = 0; i < state.vertexBuffers.size(); i++)
+-            {
+                 m_CurrentVertexBuffers[i] = state.vertexBuffers[i].buffer;
+-            }
++        }
++        if (updateIndexBuffer)
++        {
++            m_CurrentIndexBufferBinding = state.indexBuffer;
+             m_CurrentIndexBuffer = state.indexBuffer.buffer;
+         }
+     }

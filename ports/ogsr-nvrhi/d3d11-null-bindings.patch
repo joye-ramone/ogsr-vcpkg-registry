@@ -1,0 +1,76 @@
+diff --git a/src/d3d11/d3d11-resource-bindings.cpp b/src/d3d11/d3d11-resource-bindings.cpp
+index d0b24bd..58a0ec7 100644
+--- a/src/d3d11/d3d11-resource-bindings.cpp
++++ b/src/d3d11/d3d11-resource-bindings.cpp
+@@ -57,6 +57,39 @@ BindingSetHandle Device::createBindingSet(const BindingSetDesc& desc, IBindingLa
+     {
+         uint32_t slot = binding.slot + binding.arrayElement;
+ 
++        // a null texture / buffer / sampler binds null at its slot (the shader reads zeros, a null sampler is the default sampler)
++        if (!binding.resourceHandle)
++        {
++            switch (binding.type)  // NOLINT(clang-diagnostic-switch-enum)
++            {
++            case ResourceType::Texture_SRV:
++            case ResourceType::TypedBuffer_SRV:
++            case ResourceType::StructuredBuffer_SRV:
++            case ResourceType::RawBuffer_SRV:
++                ret->minSRVSlot = std::min(ret->minSRVSlot, slot);
++                ret->maxSRVSlot = std::max(ret->maxSRVSlot, slot);
++                continue;
++            case ResourceType::Texture_UAV:
++            case ResourceType::TypedBuffer_UAV:
++            case ResourceType::StructuredBuffer_UAV:
++            case ResourceType::RawBuffer_UAV:
++                ret->minUAVSlot = std::min(ret->minUAVSlot, slot);
++                ret->maxUAVSlot = std::max(ret->maxUAVSlot, slot);
++                continue;
++            case ResourceType::ConstantBuffer:
++            case ResourceType::VolatileConstantBuffer:
++                ret->minConstantBufferSlot = std::min(ret->minConstantBufferSlot, slot);
++                ret->maxConstantBufferSlot = std::max(ret->maxConstantBufferSlot, slot);
++                continue;
++            case ResourceType::Sampler:
++                ret->minSamplerSlot = std::min(ret->minSamplerSlot, slot);
++                ret->maxSamplerSlot = std::max(ret->maxSamplerSlot, slot);
++                continue;
++            default:
++                break;
++            }
++        }
++
+         switch (binding.type)  // NOLINT(clang-diagnostic-switch-enum)
+         {
+         case ResourceType::Texture_SRV:
+diff --git a/src/validation/validation-device.cpp b/src/validation/validation-device.cpp
+index 885c3c5..e081fe6 100644
+--- a/src/validation/validation-device.cpp
++++ b/src/validation/validation-device.cpp
+@@ -1606,6 +1606,9 @@ namespace nvrhi::validation
+         {
+             ITexture* texture = checked_cast<ITexture*>(binding.resourceHandle);
+ 
++            if (texture == nullptr && m_Device->getGraphicsAPI() == GraphicsAPI::D3D11)
++                break; // bound as null (the D3D11 backend allows it)
++
+             if (texture == nullptr)
+             {
+                 errorStream << "Null resource bindings are not allowed for textures." << std::endl;
+@@ -1664,7 +1667,7 @@ namespace nvrhi::validation
+         {
+             IBuffer* buffer = checked_cast<IBuffer*>(binding.resourceHandle);
+ 
+-            if (buffer == nullptr && binding.type != ResourceType::TypedBuffer_SRV && binding.type != ResourceType::TypedBuffer_UAV && m_Device->getGraphicsAPI() != GraphicsAPI::VULKAN)
++            if (buffer == nullptr && binding.type != ResourceType::TypedBuffer_SRV && binding.type != ResourceType::TypedBuffer_UAV && m_Device->getGraphicsAPI() != GraphicsAPI::VULKAN && m_Device->getGraphicsAPI() != GraphicsAPI::D3D11)
+             {
+                 errorStream << "Null resource bindings are not allowed for buffers, unless it's a "
+                     "TypedBuffer_SRV or TypedBuffer_UAV type binding on DX11 or DX12." << std::endl;
+@@ -1779,7 +1782,7 @@ namespace nvrhi::validation
+         }
+ 
+         case ResourceType::Sampler:
+-            if (binding.resourceHandle == nullptr)
++            if (binding.resourceHandle == nullptr && m_Device->getGraphicsAPI() != GraphicsAPI::D3D11)
+             {
+                 errorStream << "Null resource bindings are not allowed for samplers." << std::endl;
+                 return false;
