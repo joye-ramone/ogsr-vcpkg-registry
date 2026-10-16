@@ -1,0 +1,181 @@
+diff --git a/include/nvrhi/d3d12.h b/include/nvrhi/d3d12.h
+index c4b01d0..c66363f 100644
+--- a/include/nvrhi/d3d12.h
++++ b/include/nvrhi/d3d12.h
+@@ -144,4 +144,12 @@ namespace nvrhi::d3d12
+     NVRHI_API DeviceHandle createDevice(const DeviceDesc& desc);
+ 
+     NVRHI_API DXGI_FORMAT convertFormat(nvrhi::Format format);
++
++    // OGSR: the vertex and index buffers of the next draw when nothing else of the graphics state changed since the last setGraphicsState:
++    // binds what differs and updates the list's state cache, as setGraphicsState with the same state but these buffers would. False, nothing
++    // done: the list needs setGraphicsState (no valid graphics state, resource states to require again, or a descriptor heap changed)
++    NVRHI_API bool setVertexIndexBuffers(nvrhi::ICommandList* commandList, const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, const IndexBufferBinding& indexBuffer);
++
++    // OGSR: whether the list still holds the graphics state of its last setGraphicsState, so that a draw changing nothing needs no state call
++    NVRHI_API bool hasGraphicsState(nvrhi::ICommandList* commandList);
+ }
+\ No newline at end of file
+diff --git a/src/d3d12/d3d12-backend.h b/src/d3d12/d3d12-backend.h
+index d6914df..86b75ef 100644
+--- a/src/d3d12/d3d12-backend.h
++++ b/src/d3d12/d3d12-backend.h
+@@ -1170,6 +1170,14 @@ namespace nvrhi::d3d12
+         void updateGraphicsVolatileBuffers() override;
+         void updateComputeVolatileBuffers() override;
+ 
++        // nvrhi::d3d12::setVertexIndexBuffers, nvrhi::d3d12::hasGraphicsState (OGSR)
++        bool setVertexIndexBuffers(const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, const IndexBufferBinding& indexBuffer);
++        bool hasGraphicsState() const
++        {
++            return m_CurrentGraphicsStateValid && !m_BindingStatesDirty && m_Resources.shaderResourceViewHeap.getShaderVisibleHeap() == m_CurrentHeapSRVetc &&
++                m_Resources.samplerHeap.getShaderVisibleHeap() == m_CurrentHeapSamplers;
++        }
++
+         void setComputeBindings(
+             const BindingSetVector& bindings,
+             uint32_t bindingUpdateMask,
+diff --git a/src/d3d12/d3d12-commandlist.cpp b/src/d3d12/d3d12-commandlist.cpp
+index dd3b48f..88d3acb 100644
+--- a/src/d3d12/d3d12-commandlist.cpp
++++ b/src/d3d12/d3d12-commandlist.cpp
+@@ -433,6 +433,19 @@ namespace nvrhi::d3d12
+         (void)convertDescs;
+         (void)numDescs;
+         utils::NotSupported();
+-#endif        
++#endif
++    }
++
++    // OGSR
++    bool setVertexIndexBuffers(nvrhi::ICommandList* commandList, const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, const IndexBufferBinding& indexBuffer)
++    {
++        auto* list = static_cast<CommandList*>(commandList->getNativeObject(ObjectTypes::Nvrhi_D3D12_CommandList).pointer);
++        return list && list->setVertexIndexBuffers(vertexBuffers, vertexBufferCount, indexBuffer);
++    }
++
++    bool hasGraphicsState(nvrhi::ICommandList* commandList)
++    {
++        auto* list = static_cast<CommandList*>(commandList->getNativeObject(ObjectTypes::Nvrhi_D3D12_CommandList).pointer);
++        return list && list->hasGraphicsState();
+     }
+ } // namespace nvrhi::d3d12
+\ No newline at end of file
+diff --git a/src/d3d12/d3d12-graphics.cpp b/src/d3d12/d3d12-graphics.cpp
+index f2ca288..cb40f15 100644
+--- a/src/d3d12/d3d12-graphics.cpp
++++ b/src/d3d12/d3d12-graphics.cpp
+@@ -507,11 +507,112 @@ namespace nvrhi::d3d12
+         m_CurrentComputeStateValid = false;
+         m_CurrentMeshletStateValid = false;
+         m_CurrentRayTracingStateValid = false;
+-        m_CurrentGraphicsState = state;
++
++        // OGSR: the state is recorded element by element: a static_vector assignment copies its whole capacity (the viewport state is two
++        // arrays of 16, the vertex bindings 16), about 1 KB a draw
++        const auto copyUsed = [](auto& dst, const auto& src) {
++            dst.resize(src.size());
++            for (size_t i = 0; i < src.size(); i++)
++                dst[i] = src[i];
++        };
++        m_CurrentGraphicsState.pipeline = state.pipeline;
++        m_CurrentGraphicsState.framebuffer = state.framebuffer;
++        if (updateViewports)
++        {
++            copyUsed(m_CurrentGraphicsState.viewport.viewports, state.viewport.viewports);
++            copyUsed(m_CurrentGraphicsState.viewport.scissorRects, state.viewport.scissorRects);
++        }
++        m_CurrentGraphicsState.shadingRateState = state.shadingRateState;
++        m_CurrentGraphicsState.blendConstantColor = state.blendConstantColor;
++        copyUsed(m_CurrentGraphicsState.bindings, state.bindings);
++        if (updateVertexBuffers)
++            copyUsed(m_CurrentGraphicsState.vertexBuffers, state.vertexBuffers);
++        m_CurrentGraphicsState.indexBuffer = state.indexBuffer;
++        m_CurrentGraphicsState.indirectParams = state.indirectParams;
++        m_CurrentGraphicsState.indirectCountBuffer = state.indirectCountBuffer;
+         m_CurrentGraphicsState.dynamicStencilRefValue = effectiveStencilRefValue;
+         m_BindingStatesDirty = false;
+     }
+ 
++    // nvrhi::d3d12::setVertexIndexBuffers (OGSR): setGraphicsState's vertex / index buffer part for a draw that changes nothing else
++    bool CommandList::setVertexIndexBuffers(const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, const IndexBufferBinding& indexBuffer)
++    {
++        // the full path is needed when the list holds no graphics state, resource states must be required again (m_BindingStatesDirty), or a
++        // descriptor heap changed (every binding is set again)
++        if (!m_CurrentGraphicsStateValid || m_BindingStatesDirty || vertexBufferCount > c_MaxVertexAttributes ||
++            m_Resources.shaderResourceViewHeap.getShaderVisibleHeap() != m_CurrentHeapSRVetc || m_Resources.samplerHeap.getShaderVisibleHeap() != m_CurrentHeapSamplers)
++            return false;
++
++        const bool updateIndexBuffer = m_CurrentGraphicsState.indexBuffer != indexBuffer;
++        bool updateVertexBuffers = vertexBufferCount != m_CurrentGraphicsState.vertexBuffers.size();
++        for (uint32_t i = 0; i < vertexBufferCount && !updateVertexBuffers; i++)
++            updateVertexBuffers = vertexBuffers[i] != m_CurrentGraphicsState.vertexBuffers[i];
++
++        if (updateIndexBuffer)
++        {
++            D3D12_INDEX_BUFFER_VIEW IBV = {};
++
++            if (indexBuffer.buffer)
++            {
++                Buffer* buffer = checked_cast<Buffer*>(indexBuffer.buffer);
++
++                IBV.Format = getDxgiFormatMapping(indexBuffer.format).srvFormat;
++                IBV.SizeInBytes = (UINT)(buffer->desc.byteSize - indexBuffer.offset);
++                IBV.BufferLocation = buffer->gpuVA + indexBuffer.offset;
++
++                m_Instance->reference(buffer);
++
++                if (m_EnableAutomaticBarriers)
++                    requireBufferState(buffer, ResourceStates::IndexBuffer);
++            }
++
++            m_ActiveCommandList->commandList->IASetIndexBuffer(&IBV);
++            m_CurrentGraphicsState.indexBuffer = indexBuffer;
++        }
++
++        if (updateVertexBuffers)
++        {
++            D3D12_VERTEX_BUFFER_VIEW VBVs[c_MaxVertexAttributes] = {};
++            uint32_t maxVbIndex = 0;
++            GraphicsPipeline* pso = checked_cast<GraphicsPipeline*>(m_CurrentGraphicsState.pipeline);
++            InputLayout* inputLayout = checked_cast<InputLayout*>(pso->desc.inputLayout.Get());
++
++            for (uint32_t i = 0; i < vertexBufferCount; i++)
++            {
++                const VertexBufferBinding& binding = vertexBuffers[i];
++                Buffer* buffer = checked_cast<Buffer*>(binding.buffer);
++
++                if (binding.slot >= c_MaxVertexAttributes)
++                    continue;
++
++                VBVs[binding.slot].StrideInBytes = binding.stride ? binding.stride : inputLayout->elementStrides[binding.slot];
++                VBVs[binding.slot].SizeInBytes = (UINT)(std::min(buffer->desc.byteSize - binding.offset, (uint64_t)ULONG_MAX));
++                VBVs[binding.slot].BufferLocation = buffer->gpuVA + binding.offset;
++                maxVbIndex = std::max(maxVbIndex, binding.slot);
++
++                m_Instance->reference(buffer);
++
++                if (m_EnableAutomaticBarriers)
++                    requireBufferState(buffer, ResourceStates::VertexBuffer);
++            }
++
++            for (const VertexBufferBinding& binding : m_CurrentGraphicsState.vertexBuffers)
++            {
++                if (binding.slot < c_MaxVertexAttributes)
++                    maxVbIndex = std::max(maxVbIndex, binding.slot);
++            }
++
++            m_ActiveCommandList->commandList->IASetVertexBuffers(0, maxVbIndex + 1, VBVs);
++
++            m_CurrentGraphicsState.vertexBuffers.resize(vertexBufferCount);
++            for (uint32_t i = 0; i < vertexBufferCount; i++)
++                m_CurrentGraphicsState.vertexBuffers[i] = vertexBuffers[i];
++        }
++
++        commitBarriers();
++        return true;
++    }
++
+     void CommandList::unbindShadingRateState()
+     {
+         if (m_CurrentGraphicsStateValid && m_CurrentGraphicsState.shadingRateState.enabled)

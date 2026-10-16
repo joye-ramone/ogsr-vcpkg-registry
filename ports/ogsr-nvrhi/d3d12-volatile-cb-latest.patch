@@ -1,0 +1,81 @@
+diff --git a/src/d3d12/d3d12-backend.h b/src/d3d12/d3d12-backend.h
+index 94963a9..d6914df 100644
+--- a/src/d3d12/d3d12-backend.h
++++ b/src/d3d12/d3d12-backend.h
+@@ -1195,6 +1195,9 @@ namespace nvrhi::d3d12
+             uint32_t bindingPoint; // RootParameterIndex
+             Buffer* buffer;
+             D3D12_GPU_VIRTUAL_ADDRESS address;
++            // the buffer's newest version (OGSR): writeBuffer sets it on the bound slots of the buffer, the draw rebinds the slots where it
++            // differs from address (no lookup in m_VolatileConstantBufferAddresses per bound buffer and draw)
++            D3D12_GPU_VIRTUAL_ADDRESS latest;
+         };
+         
+         Device* m_Device;
+diff --git a/src/d3d12/d3d12-buffer.cpp b/src/d3d12/d3d12-buffer.cpp
+index c3808b2..b7bf8ac 100644
+--- a/src/d3d12/d3d12-buffer.cpp
++++ b/src/d3d12/d3d12-buffer.cpp
+@@ -586,6 +586,14 @@ namespace nvrhi::d3d12
+         {
+             m_VolatileConstantBufferAddresses[buffer] = gpuVA;
+             m_AnyVolatileBufferWrites = true;
++
++            // the bound slots of this buffer take the new version at the next draw / dispatch (OGSR)
++            for (VolatileConstantBufferBinding& parameter : m_CurrentGraphicsVolatileCBs)
++                if (parameter.buffer == buffer)
++                    parameter.latest = gpuVA;
++            for (VolatileConstantBufferBinding& parameter : m_CurrentComputeVolatileCBs)
++                if (parameter.buffer == buffer)
++                    parameter.latest = gpuVA;
+         }
+         else
+         {
+diff --git a/src/d3d12/d3d12-compute.cpp b/src/d3d12/d3d12-compute.cpp
+index faff365..facbcdf 100644
+--- a/src/d3d12/d3d12-compute.cpp
++++ b/src/d3d12/d3d12-compute.cpp
+@@ -150,7 +150,7 @@ namespace nvrhi::d3d12
+ 
+         for (VolatileConstantBufferBinding& parameter : m_CurrentComputeVolatileCBs)
+         {
+-            const D3D12_GPU_VIRTUAL_ADDRESS currentGpuVA = m_VolatileConstantBufferAddresses[parameter.buffer];
++            const D3D12_GPU_VIRTUAL_ADDRESS currentGpuVA = parameter.latest; // OGSR: set by writeBuffer, no map lookup
+ 
+             if (currentGpuVA != parameter.address)
+             {
+diff --git a/src/d3d12/d3d12-graphics.cpp b/src/d3d12/d3d12-graphics.cpp
+index f25209c..f2ca288 100644
+--- a/src/d3d12/d3d12-graphics.cpp
++++ b/src/d3d12/d3d12-graphics.cpp
+@@ -532,7 +532,7 @@ namespace nvrhi::d3d12
+ 
+         for (VolatileConstantBufferBinding& parameter : m_CurrentGraphicsVolatileCBs)
+         {
+-            D3D12_GPU_VIRTUAL_ADDRESS currentGpuVA = m_VolatileConstantBufferAddresses[parameter.buffer];
++            const D3D12_GPU_VIRTUAL_ADDRESS currentGpuVA = parameter.latest; // OGSR: set by writeBuffer, no map lookup
+ 
+             if (currentGpuVA != parameter.address)
+             {
+diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bindings.cpp
+index 7d16362..6241687 100644
+--- a/src/d3d12/d3d12-resource-bindings.cpp
++++ b/src/d3d12/d3d12-resource-bindings.cpp
+@@ -1005,7 +1005,7 @@ namespace nvrhi::d3d12
+                                     m_ActiveCommandList->commandList->SetComputeRootConstantBufferView(rootParameterIndex, volatileData);
+                                 }
+ 
+-                                newVolatileCBs.push_back(VolatileConstantBufferBinding{ rootParameterIndex, buffer, volatileData });
++                                newVolatileCBs.push_back(VolatileConstantBufferBinding{ rootParameterIndex, buffer, volatileData, volatileData });
+                             }
+                             else if (updateThisSet)
+                             {
+@@ -1132,7 +1132,7 @@ namespace nvrhi::d3d12
+                                     m_ActiveCommandList->commandList->SetGraphicsRootConstantBufferView(rootParameterIndex, volatileData);
+                                 }
+ 
+-                                newVolatileCBs.push_back(VolatileConstantBufferBinding{ rootParameterIndex, buffer, volatileData });
++                                newVolatileCBs.push_back(VolatileConstantBufferBinding{ rootParameterIndex, buffer, volatileData, volatileData });
+                             }
+                             else if (updateThisSet)
+                             {

@@ -37,6 +37,14 @@
 #                                    lists recorded on several threads (the sun cascades clear slices of one shadow map); the upload
 #                                    manager returns false when a chunk's buffer is not created (after a device removal) instead of
 #                                    dereferencing it
+#   d3d12-referenced-once.patch      D3D12: a command list instance references a pipeline, framebuffer, binding set or buffer once (a set of
+#                                    addresses per instance), not at every bind: no interlocked AddRef per pipeline / buffer change on objects
+#                                    all recording threads bind
+#   d3d12-volatile-cb-latest.patch   D3D12: writeBuffer into a volatile constant buffer stores the new address in the bound slots of that buffer;
+#                                    the draw / dispatch rebinds the slots that changed without a hash map lookup per bound buffer
+#   d3d12-set-vertex-index-buffers.patch  nvrhi::d3d12::setVertexIndexBuffers (the vertex / index buffers of a draw that changes nothing else)
+#                                    and nvrhi::d3d12::hasGraphicsState, the D3D12 twins of patches 13 and 15's; setGraphicsState records the
+#                                    state element by element (a static_vector assignment copies its whole capacity, about 1 KB a draw)
 
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
@@ -63,6 +71,9 @@ vcpkg_from_github(
         d3d11-same-layout-sets.patch
         d3d11-graphics-bindings.patch
         d3d12-view-cache-lock.patch
+        d3d12-referenced-once.patch
+        d3d12-volatile-cb-latest.patch
+        d3d12-set-vertex-index-buffers.patch
 )
 
 vcpkg_cmake_configure(

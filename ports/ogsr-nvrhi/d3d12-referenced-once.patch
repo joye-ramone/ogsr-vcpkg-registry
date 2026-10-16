@@ -1,0 +1,225 @@
+diff --git a/src/d3d12/d3d12-backend.h b/src/d3d12/d3d12-backend.h
+index ac1e83e..94963a9 100644
+--- a/src/d3d12/d3d12-backend.h
++++ b/src/d3d12/d3d12-backend.h
+@@ -988,9 +988,59 @@ namespace nvrhi::d3d12
+ #endif
+     };
+ 
++    // The resources a command list instance references, by address (OGSR): a list binds the same pipelines, buffers and framebuffers again and
++    // again, and each push into referencedResources is an interlocked AddRef on an object other recording threads use too. Open addressing,
++    // power of two, at most half full; a referenced resource cannot be freed and its address reused while the instance holds it
++    class ReferenceSet
++    {
++    public:
++        // true: not referenced yet, now recorded
++        bool insert(const void* resource)
++        {
++            if ((m_Count + 1) * 2 > m_Slots.size())
++                grow();
++            const size_t mask = m_Slots.size() - 1;
++            for (size_t i = slot(resource) & mask;; i = (i + 1) & mask)
++            {
++                if (m_Slots[i] == resource)
++                    return false;
++                if (!m_Slots[i])
++                {
++                    m_Slots[i] = resource;
++                    ++m_Count;
++                    return true;
++                }
++            }
++        }
++
++    private:
++        std::vector<const void*> m_Slots;
++        size_t m_Count = 0;
++
++        static size_t slot(const void* resource) { return size_t((uint64_t(reinterpret_cast<uintptr_t>(resource) >> 4) * 0x9E3779B97F4A7C15ull) >> 32); }
++
++        void grow()
++        {
++            std::vector<const void*> old = std::move(m_Slots);
++            m_Slots.assign(old.empty() ? 256 : old.size() * 2, nullptr);
++            m_Count = 0;
++            for (const void* resource : old)
++                if (resource)
++                    insert(resource);
++        }
++    };
++
+     class CommandListInstance
+     {
+     public:
++        // referencedResources.push_back(resource) for a resource not referenced yet (OGSR)
++        void reference(IResource* resource)
++        {
++            if (resource && referencedSet.insert(resource))
++                referencedResources.push_back(resource);
++        }
++
++        ReferenceSet referencedSet;
+         uint64_t submittedInstance = 0;
+         CommandQueue commandQueue = CommandQueue::Graphics;
+         RefCountPtr<ID3D12Fence> fence;
+diff --git a/src/d3d12/d3d12-buffer.cpp b/src/d3d12/d3d12-buffer.cpp
+index 10a89f2..c3808b2 100644
+--- a/src/d3d12/d3d12-buffer.cpp
++++ b/src/d3d12/d3d12-buffer.cpp
+@@ -596,7 +596,7 @@ namespace nvrhi::d3d12
+             }
+             commitBarriers();
+ 
+-            m_Instance->referencedResources.push_back(buffer);
++            m_Instance->reference(buffer);
+ 
+             m_ActiveCommandList->commandList->CopyBufferRegion(buffer->resource, destOffsetBytes, uploadBuffer, offsetInUploadBuffer, dataSize);
+         }
+@@ -627,7 +627,7 @@ namespace nvrhi::d3d12
+         DescriptorIndex clearUAV = b->getClearUAV();
+         assert(clearUAV != c_InvalidDescriptorIndex);
+ 
+-        m_Instance->referencedResources.push_back(b);
++        m_Instance->reference(b);
+ 
+         const uint32_t values[4] = { clearValue, clearValue, clearValue, clearValue };
+         m_ActiveCommandList->commandList->ClearUnorderedAccessViewUint(
+@@ -652,12 +652,12 @@ namespace nvrhi::d3d12
+         if(src->desc.cpuAccess != CpuAccessMode::None)
+             m_Instance->referencedStagingBuffers.push_back(src);
+         else
+-            m_Instance->referencedResources.push_back(src);
++            m_Instance->reference(src);
+ 
+         if (dest->desc.cpuAccess != CpuAccessMode::None)
+             m_Instance->referencedStagingBuffers.push_back(dest);
+         else
+-            m_Instance->referencedResources.push_back(dest);
++            m_Instance->reference(dest);
+ 
+         m_ActiveCommandList->commandList->CopyBufferRegion(dest->resource, destOffsetBytes, src->resource, srcOffsetBytes, dataSizeBytes);
+     }
+diff --git a/src/d3d12/d3d12-compute.cpp b/src/d3d12/d3d12-compute.cpp
+index 5c731f0..faff365 100644
+--- a/src/d3d12/d3d12-compute.cpp
++++ b/src/d3d12/d3d12-compute.cpp
+@@ -125,7 +125,7 @@ namespace nvrhi::d3d12
+         {
+             m_ActiveCommandList->commandList->SetPipelineState(pso->pipelineState);
+             
+-            m_Instance->referencedResources.push_back(pso);
++            m_Instance->reference(pso);
+         }
+ 
+         setComputeBindings(state.bindings, bindingUpdateMask, state.indirectParams, updateIndirectParams, pso->rootSignature);
+diff --git a/src/d3d12/d3d12-graphics.cpp b/src/d3d12/d3d12-graphics.cpp
+index f29a7f3..f25209c 100644
+--- a/src/d3d12/d3d12-graphics.cpp
++++ b/src/d3d12/d3d12-graphics.cpp
+@@ -334,7 +334,7 @@ namespace nvrhi::d3d12
+         if (updatePipeline)
+         {
+             bindGraphicsPipeline(pso, updateRootSignature);
+-            m_Instance->referencedResources.push_back(pso);
++            m_Instance->reference(pso);
+         }
+ 
+         if (pso->desc.renderState.depthStencilState.stencilEnable && (updatePipeline || updateStencilRef))
+@@ -350,7 +350,7 @@ namespace nvrhi::d3d12
+         if (updateFramebuffer)
+         {
+             bindFramebuffer(framebuffer);
+-            m_Instance->referencedResources.push_back(framebuffer);
++            m_Instance->reference(framebuffer);
+         }
+         
+         if (m_EnableAutomaticBarriers && framebuffer && (m_BindingStatesDirty || updateFramebuffer))
+@@ -375,7 +375,7 @@ namespace nvrhi::d3d12
+                 IBV.SizeInBytes = (UINT)(buffer->desc.byteSize - state.indexBuffer.offset);
+                 IBV.BufferLocation = buffer->gpuVA + state.indexBuffer.offset;
+ 
+-                m_Instance->referencedResources.push_back(state.indexBuffer.buffer);
++                m_Instance->reference(state.indexBuffer.buffer);
+             }
+ 
+             m_ActiveCommandList->commandList->IASetIndexBuffer(&IBV);
+@@ -407,7 +407,7 @@ namespace nvrhi::d3d12
+                 VBVs[binding.slot].BufferLocation = buffer->gpuVA + binding.offset;
+                 maxVbIndex = std::max(maxVbIndex, binding.slot);
+ 
+-                m_Instance->referencedResources.push_back(buffer);
++                m_Instance->reference(buffer);
+             }
+ 
+             if (m_CurrentGraphicsStateValid)
+diff --git a/src/d3d12/d3d12-meshlets.cpp b/src/d3d12/d3d12-meshlets.cpp
+index 00ce975..5ccc9bd 100644
+--- a/src/d3d12/d3d12-meshlets.cpp
++++ b/src/d3d12/d3d12-meshlets.cpp
+@@ -255,7 +255,7 @@ namespace nvrhi::d3d12
+         if (updatePipeline)
+         {
+             bindMeshletPipeline(pso, updateRootSignature);
+-            m_Instance->referencedResources.push_back(pso);
++            m_Instance->reference(pso);
+         }
+ 
+         if (pso->desc.renderState.depthStencilState.stencilEnable && (updatePipeline || updateStencilRef))
+@@ -271,7 +271,7 @@ namespace nvrhi::d3d12
+         if (updateFramebuffer)
+         {
+             bindFramebuffer(framebuffer);
+-            m_Instance->referencedResources.push_back(framebuffer);
++            m_Instance->reference(framebuffer);
+         }
+ 
+         if (m_EnableAutomaticBarriers && framebuffer && (m_BindingStatesDirty || updateFramebuffer))
+diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bindings.cpp
+index be458e2..7d16362 100644
+--- a/src/d3d12/d3d12-resource-bindings.cpp
++++ b/src/d3d12/d3d12-resource-bindings.cpp
+@@ -1039,7 +1039,7 @@ namespace nvrhi::d3d12
+                         }
+ 
+                         if (bindingSet->desc.trackLiveness)
+-                            m_Instance->referencedResources.push_back(bindingSet);
++                            m_Instance->reference(bindingSet);
+                     }
+ 
+                     if (m_EnableAutomaticBarriers && (m_BindingStatesDirty || updateThisSet || bindingSet->hasUavBindings)) // UAV bindings may place UAV barriers on the same binding set
+@@ -1064,7 +1064,7 @@ namespace nvrhi::d3d12
+             {
+                 requireBufferState(indirectParams, ResourceStates::IndirectArgument);
+             }
+-            m_Instance->referencedResources.push_back(indirectParams);
++            m_Instance->reference(indirectParams);
+         }
+ 
+         uint32_t bindingMask = (1 << uint32_t(bindings.size())) - 1;
+@@ -1166,7 +1166,7 @@ namespace nvrhi::d3d12
+                         }
+ 
+                         if (bindingSet->desc.trackLiveness)
+-                            m_Instance->referencedResources.push_back(bindingSet);
++                            m_Instance->reference(bindingSet);
+                     }
+ 
+                     if (m_EnableAutomaticBarriers && (m_BindingStatesDirty || updateThisSet || bindingSet->hasUavBindings)) // UAV bindings may place UAV barriers on the same binding set
+@@ -1191,7 +1191,7 @@ namespace nvrhi::d3d12
+             {
+                 requireBufferState(indirectParams, ResourceStates::IndirectArgument);
+             }
+-            m_Instance->referencedResources.push_back(indirectParams);
++            m_Instance->reference(indirectParams);
+         }
+ 
+         if (indirectCountBuffer && updateIndirectCountBuffer)
+@@ -1200,7 +1200,7 @@ namespace nvrhi::d3d12
+             {
+                 requireBufferState(indirectCountBuffer, ResourceStates::IndirectArgument);
+             }
+-            m_Instance->referencedResources.push_back(indirectCountBuffer);
++            m_Instance->reference(indirectCountBuffer);
+         }
+ 
+         uint32_t bindingMask = (1 << uint32_t(bindings.size())) - 1;
