@@ -13,7 +13,7 @@ Updating a package or adding a new one: `AGENTS.md`.
 | `ogsr-libsquashfs` | 2024-03-24 | https://github.com/AgentD/squashfs-tools-ng (`master`) |
 | `ogsr-directxtex` | 2026-08-28 | https://github.com/solbjorn/DirectXTex (`master`) |
 | `ogsr-nvidia-dlss` | 310.9.1#1 | https://github.com/NVIDIA/DLSS (`v310.9.1`) |
-| `ogsr-fidelityfx-fsr3` | 2026-10-04 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.2-DX11-Native-API`) |
+| `ogsr-fidelityfx-fsr3` | 2026-10-16 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.2-DX11-Native-API`) |
 | `ogsr-tracy` | 2026-10-03 | https://github.com/wolfpld/tracy (`master` after v0.14.1, 0.14.2 dev, protocol 83) |
 | `ogsr-nvrhi` | 2026-10-05 | https://github.com/NVIDIA-RTX/NVRHI (`main`, 16 OGSR patches in the port: D3D11 deferred command lists, native handles, binding cost, D3D12 view cache lock) |
 
