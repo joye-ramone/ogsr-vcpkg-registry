@@ -1,0 +1,211 @@
+diff --git a/include/nvrhi/d3d12.h b/include/nvrhi/d3d12.h
+index c66363f..afc0903 100644
+--- a/include/nvrhi/d3d12.h
++++ b/include/nvrhi/d3d12.h
+@@ -152,4 +152,9 @@ namespace nvrhi::d3d12
+ 
+     // OGSR: whether the list still holds the graphics state of its last setGraphicsState, so that a draw changing nothing needs no state call
+     NVRHI_API bool hasGraphicsState(nvrhi::ICommandList* commandList);
++
++    // OGSR: the textures the list's current instance uses (bound through a binding set, cleared, copied, written, resolved or given a
++    // state), each once; valid from close() to executeCommandLists. For an application that manages residency: a texture evicted with
++    // ID3D12Device::Evict must be made resident before a list that uses it runs. Empty for a list that is not a D3D12 one
++    NVRHI_API void getReferencedTextures(nvrhi::ICommandList* commandList, ITexture* const** textures, size_t* count);
+ }
+\ No newline at end of file
+diff --git a/src/d3d12/d3d12-backend.h b/src/d3d12/d3d12-backend.h
+index 86b75ef..e29093e 100644
+--- a/src/d3d12/d3d12-backend.h
++++ b/src/d3d12/d3d12-backend.h
+@@ -662,6 +662,9 @@ namespace nvrhi::d3d12
+         
+         std::vector<RefCountPtr<IResource>> resources;
+ 
++        // the textures among resources (OGSR: CommandListInstance::referencedTextures)
++        std::vector<ITexture*> textures;
++
+         std::vector<uint16_t> bindingsThatNeedTransitions;
+ 
+         BindingSet(const Context& context, DeviceResources& resources)
+@@ -1040,7 +1043,27 @@ namespace nvrhi::d3d12
+                 referencedResources.push_back(resource);
+         }
+ 
++        // a texture the instance uses, once (OGSR: nvrhi::d3d12::getReferencedTextures)
++        void referenceTexture(ITexture* texture)
++        {
++            if (texture && referencedTextureSet.insert(texture))
++                referencedTextures.push_back(texture);
++        }
++
++        // reference() of a binding set, and its textures (OGSR)
++        void referenceBindingSet(BindingSet* bindingSet)
++        {
++            if (bindingSet && referencedSet.insert(bindingSet))
++            {
++                referencedResources.push_back(bindingSet);
++                for (ITexture* texture : bindingSet->textures)
++                    referenceTexture(texture);
++            }
++        }
++
+         ReferenceSet referencedSet;
++        ReferenceSet referencedTextureSet;
++        std::vector<ITexture*> referencedTextures;
+         uint64_t submittedInstance = 0;
+         CommandQueue commandQueue = CommandQueue::Graphics;
+         RefCountPtr<ID3D12Fence> fence;
+@@ -1172,6 +1195,9 @@ namespace nvrhi::d3d12
+ 
+         // nvrhi::d3d12::setVertexIndexBuffers, nvrhi::d3d12::hasGraphicsState (OGSR)
+         bool setVertexIndexBuffers(const VertexBufferBinding* vertexBuffers, uint32_t vertexBufferCount, const IndexBufferBinding& indexBuffer);
++        // OGSR: nvrhi::d3d12::getReferencedTextures
++        const std::vector<ITexture*>* getReferencedTextures() const { return m_Instance ? &m_Instance->referencedTextures : nullptr; }
++
+         bool hasGraphicsState() const
+         {
+             return m_CurrentGraphicsStateValid && !m_BindingStatesDirty && m_Resources.shaderResourceViewHeap.getShaderVisibleHeap() == m_CurrentHeapSRVetc &&
+diff --git a/src/d3d12/d3d12-commandlist.cpp b/src/d3d12/d3d12-commandlist.cpp
+index 88d3acb..b26a01c 100644
+--- a/src/d3d12/d3d12-commandlist.cpp
++++ b/src/d3d12/d3d12-commandlist.cpp
+@@ -448,4 +448,12 @@ namespace nvrhi::d3d12
+         auto* list = static_cast<CommandList*>(commandList->getNativeObject(ObjectTypes::Nvrhi_D3D12_CommandList).pointer);
+         return list && list->hasGraphicsState();
+     }
++
++    void getReferencedTextures(nvrhi::ICommandList* commandList, ITexture* const** textures, size_t* count)
++    {
++        auto* list = static_cast<CommandList*>(commandList->getNativeObject(ObjectTypes::Nvrhi_D3D12_CommandList).pointer);
++        const std::vector<ITexture*>* referenced = list ? list->getReferencedTextures() : nullptr;
++        *textures = referenced ? referenced->data() : nullptr;
++        *count = referenced ? referenced->size() : 0;
++    }
+ } // namespace nvrhi::d3d12
+\ No newline at end of file
+diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bindings.cpp
+index 6241687..47e6355 100644
+--- a/src/d3d12/d3d12-resource-bindings.cpp
++++ b/src/d3d12/d3d12-resource-bindings.cpp
+@@ -229,6 +229,7 @@ namespace nvrhi::d3d12
+                             texture->createSRV(descriptorHandle.ptr, binding.format, binding.dimension, subresources,
+                                 resolveComponentMapping(binding.overrideComponentMapping, texture->desc.defaultComponentMapping));
+                             pResource = texture;
++                            textures.push_back(texture);
+ 
+                             if (!texture->permanentState)
+                                 bindingsThatNeedTransitions.push_back(static_cast<uint16_t>(bindingIndex));
+@@ -247,6 +248,7 @@ namespace nvrhi::d3d12
+ 
+                             texture->createUAV(descriptorHandle.ptr, binding.format, binding.dimension, subresources);
+                             pResource = texture;
++                            textures.push_back(texture);
+ 
+                             if (!texture->permanentState)
+                                 bindingsThatNeedTransitions.push_back(static_cast<uint16_t>(bindingIndex));
+@@ -1039,7 +1041,7 @@ namespace nvrhi::d3d12
+                         }
+ 
+                         if (bindingSet->desc.trackLiveness)
+-                            m_Instance->reference(bindingSet);
++                            m_Instance->referenceBindingSet(bindingSet);
+                     }
+ 
+                     if (m_EnableAutomaticBarriers && (m_BindingStatesDirty || updateThisSet || bindingSet->hasUavBindings)) // UAV bindings may place UAV barriers on the same binding set
+@@ -1166,7 +1168,7 @@ namespace nvrhi::d3d12
+                         }
+ 
+                         if (bindingSet->desc.trackLiveness)
+-                            m_Instance->reference(bindingSet);
++                            m_Instance->referenceBindingSet(bindingSet);
+                     }
+ 
+                     if (m_EnableAutomaticBarriers && (m_BindingStatesDirty || updateThisSet || bindingSet->hasUavBindings)) // UAV bindings may place UAV barriers on the same binding set
+diff --git a/src/d3d12/d3d12-state-tracking.cpp b/src/d3d12/d3d12-state-tracking.cpp
+index 986f9c7..de2db23 100644
+--- a/src/d3d12/d3d12-state-tracking.cpp
++++ b/src/d3d12/d3d12-state-tracking.cpp
+@@ -336,7 +336,10 @@ namespace nvrhi::d3d12
+         m_StateTracker.requireTextureState(texture, subresources, stateBits);
+ 
+         if (m_Instance)
++        {
+             m_Instance->referencedResources.push_back(texture);
++            m_Instance->referenceTexture(texture);
++        }
+     }
+ 
+     void CommandList::setBufferState(IBuffer* _buffer, ResourceStates stateBits)
+@@ -369,7 +372,10 @@ namespace nvrhi::d3d12
+         m_StateTracker.setPermanentTextureState(texture, AllSubresources, stateBits);
+ 
+         if (m_Instance)
++        {
+             m_Instance->referencedResources.push_back(texture);
++            m_Instance->referenceTexture(texture);
++        }
+     }
+ 
+     void CommandList::setPermanentBufferState(IBuffer* _buffer, ResourceStates stateBits)
+diff --git a/src/d3d12/d3d12-texture.cpp b/src/d3d12/d3d12-texture.cpp
+index a92537e..2196396 100644
+--- a/src/d3d12/d3d12-texture.cpp
++++ b/src/d3d12/d3d12-texture.cpp
+@@ -1104,6 +1104,7 @@ namespace nvrhi::d3d12
+         subresources = subresources.resolve(t->desc, false);
+ 
+         m_Instance->referencedResources.push_back(t);
++        m_Instance->referenceTexture(t);
+ 
+         if (t->desc.isRenderTarget)
+         {
+@@ -1167,6 +1168,7 @@ namespace nvrhi::d3d12
+         subresources = subresources.resolve(t->desc, false);
+ 
+         m_Instance->referencedResources.push_back(t);
++        m_Instance->referenceTexture(t);
+ 
+         if (m_EnableAutomaticBarriers)
+         {
+@@ -1241,6 +1243,7 @@ namespace nvrhi::d3d12
+         uint32_t clearValues[4] = { clearColor, clearColor, clearColor, clearColor };
+ 
+         m_Instance->referencedResources.push_back(t);
++        m_Instance->referenceTexture(t);
+ 
+         if (t->desc.isUAV)
+         {
+@@ -1375,6 +1378,8 @@ namespace nvrhi::d3d12
+ 
+         m_Instance->referencedResources.push_back(dst);
+         m_Instance->referencedResources.push_back(src);
++        m_Instance->referenceTexture(dst);
++        m_Instance->referenceTexture(src);
+ 
+         m_ActiveCommandList->commandList->CopyTextureRegion(&dstLocation,
+             resolvedDstSlice.x,
+@@ -1404,6 +1409,7 @@ namespace nvrhi::d3d12
+ 
+         m_Instance->referencedResources.push_back(dst);
+         m_Instance->referencedStagingTextures.push_back(src);
++        m_Instance->referenceTexture(dst);
+ 
+         auto srcRegion = src->getSliceRegion(m_Context.device, resolvedSrcSlice);
+ 
+@@ -1449,6 +1455,7 @@ namespace nvrhi::d3d12
+ 
+         m_Instance->referencedResources.push_back(src);
+         m_Instance->referencedStagingTextures.push_back(dst);
++        m_Instance->referenceTexture(src);
+ 
+         auto dstRegion = dst->getSliceRegion(m_Context.device, resolvedDstSlice);
+ 
+@@ -1478,6 +1485,8 @@ namespace nvrhi::d3d12
+     {
+         Texture* dest = checked_cast<Texture*>(_dest);
+ 
++        m_Instance->referenceTexture(dest); // OGSR
++
+         if (m_EnableAutomaticBarriers)
+         {
+             requireTextureState(dest, TextureSubresourceSet(mipLevel, 1, arraySlice, 1), ResourceStates::CopyDest);

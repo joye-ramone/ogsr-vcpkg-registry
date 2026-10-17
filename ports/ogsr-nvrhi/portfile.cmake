@@ -45,6 +45,9 @@
 #   d3d12-set-vertex-index-buffers.patch  nvrhi::d3d12::setVertexIndexBuffers (the vertex / index buffers of a draw that changes nothing else)
 #                                    and nvrhi::d3d12::hasGraphicsState, the D3D12 twins of patches 13 and 15's; setGraphicsState records the
 #                                    state element by element (a static_vector assignment copies its whole capacity, about 1 KB a draw)
+#   d3d12-referenced-textures.patch  nvrhi::d3d12::getReferencedTextures: the textures a command list instance uses (through its binding
+#                                    sets, clears, copies, writes, state calls), each once, from close() to executeCommandLists: the
+#                                    application's residency (a texture it evicted is made resident before a list that uses it runs)
 
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
@@ -74,6 +77,7 @@ vcpkg_from_github(
         d3d12-referenced-once.patch
         d3d12-volatile-cb-latest.patch
         d3d12-set-vertex-index-buffers.patch
+        d3d12-referenced-textures.patch
 )
 
 vcpkg_cmake_configure(
