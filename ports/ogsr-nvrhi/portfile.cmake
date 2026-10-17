@@ -48,6 +48,8 @@
 #   d3d12-referenced-textures.patch  nvrhi::d3d12::getReferencedTextures: the textures a command list instance uses (through its binding
 #                                    sets, clears, copies, writes, state calls), each once, from close() to executeCommandLists: the
 #                                    application's residency (a texture it evicted is made resident before a list that uses it runs)
+#   d3d12-root-signature-lock.patch  D3D12: Device::getRootSignature and ~RootSignature use the root signature cache under a lock
+#                                    (pipelines are created from several threads); a cached one being deleted is replaced, not revived
 
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
@@ -78,6 +80,7 @@ vcpkg_from_github(
         d3d12-volatile-cb-latest.patch
         d3d12-set-vertex-index-buffers.patch
         d3d12-referenced-textures.patch
+        d3d12-root-signature-lock.patch
 )
 
 vcpkg_cmake_configure(

@@ -1,0 +1,51 @@
+diff --git a/src/d3d12/d3d12-backend.h b/src/d3d12/d3d12-backend.h
+index e29093e..276bfb1 100644
+--- a/src/d3d12/d3d12-backend.h
++++ b/src/d3d12/d3d12-backend.h
+@@ -221,6 +221,8 @@ namespace nvrhi::d3d12
+ 
+         // The cache does not own the RS objects, so store weak references
+         std::unordered_map<size_t, RootSignature*> rootsigCache;
++        // OGSR: pipelines are created from several threads; Device::getRootSignature and ~RootSignature use the cache under this lock
++        std::mutex rootsigCacheMutex;
+ 
+         explicit DeviceResources(const Context& context, const DeviceDesc& desc);
+ 
+diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bindings.cpp
+index 47e6355..089c4c9 100644
+--- a/src/d3d12/d3d12-resource-bindings.cpp
++++ b/src/d3d12/d3d12-resource-bindings.cpp
+@@ -803,8 +803,19 @@ namespace nvrhi::d3d12
+         
+         hash_combine(hash, allowInputLayout ? 1u : 0u);
+         
++        // OGSR: under the cache lock (pipelines are created from several threads)
++        std::lock_guard lock(m_Resources.rootsigCacheMutex);
++
+         // Get a cached RS and AddRef it (if it exists)
+-        RefCountPtr<RootSignature> rootsig = m_Resources.rootsigCache[hash];
++        RefCountPtr<RootSignature> rootsig;
++        const auto it = m_Resources.rootsigCache.find(hash);
++        if (it != m_Resources.rootsigCache.end())
++        {
++            // OGSR: a count of 1 after the AddRef means another thread released the last reference and its destructor waits for this lock:
++            // the object is being deleted, so it is left alone (not released again) and a new one replaces it in the cache
++            if (it->second->AddRef() > 1)
++                rootsig.Attach(it->second);
++        }
+ 
+         if (!rootsig)
+         {
+@@ -821,9 +832,10 @@ namespace nvrhi::d3d12
+ 
+     RootSignature::~RootSignature()
+     {
+-        // Remove the root signature from the cache
++        // Remove the root signature from the cache (OGSR: under the lock, and only this object: a new one may have replaced it)
++        std::lock_guard lock(m_Resources.rootsigCacheMutex);
+         const auto it = m_Resources.rootsigCache.find(hash);
+-        if (it != m_Resources.rootsigCache.end())
++        if (it != m_Resources.rootsigCache.end() && it->second == this)
+             m_Resources.rootsigCache.erase(it);
+     }
+ 

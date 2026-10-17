@@ -15,7 +15,7 @@ Updating a package or adding a new one: `AGENTS.md`.
 | `ogsr-nvidia-dlss` | 310.9.1#1 | https://github.com/NVIDIA/DLSS (`v310.9.1`) |
 | `ogsr-fidelityfx-fsr3` | 2026-10-16 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.2-DX11-Native-API`) |
 | `ogsr-tracy` | 2026-10-03 | https://github.com/wolfpld/tracy (`master` after v0.14.1, 0.14.2 dev, protocol 83) |
-| `ogsr-nvrhi` | 2026-10-05#2 | https://github.com/NVIDIA-RTX/NVRHI (`main`, 20 OGSR patches in the port: D3D11 deferred command lists, native handles, binding cost, D3D12 view cache lock, D3D12 draw cost, textures a D3D12 list uses) |
+| `ogsr-nvrhi` | 2026-10-05#3 | https://github.com/NVIDIA-RTX/NVRHI (`main`, 21 OGSR patches in the port: D3D11 deferred command lists, native handles, binding cost, D3D12 view cache lock, D3D12 draw cost, textures a D3D12 list uses, D3D12 root signature cache lock) |
 
 Each port is pinned to one commit of its source; the exact commit is `REF` in `ports/<package>/portfile.cmake`.
 
