@@ -1,0 +1,17 @@
+diff --git a/src/d3d12/d3d12-graphics.cpp b/src/d3d12/d3d12-graphics.cpp
+index cb40f15..5e1f6cd 100644
+--- a/src/d3d12/d3d12-graphics.cpp
++++ b/src/d3d12/d3d12-graphics.cpp
+@@ -305,7 +305,11 @@ namespace nvrhi::d3d12
+         const bool updateIndirectParams = !m_CurrentGraphicsStateValid || m_CurrentGraphicsState.indirectParams != state.indirectParams;
+         const bool updateIndirectCountBuffer = !m_CurrentGraphicsStateValid || m_CurrentGraphicsState.indirectCountBuffer != state.indirectCountBuffer;
+ 
+-        const bool updateViewports = !m_CurrentGraphicsStateValid ||
++        // convertViewportState clamps the scissor rects to the framebuffer and takes the viewports' rects when the pipeline has no scissor
++        // test: a framebuffer change or a change of the pipeline's scissorEnable changes the rects too
++        const bool updateViewports = !m_CurrentGraphicsStateValid || updateFramebuffer ||
++            (updatePipeline && m_CurrentGraphicsState.pipeline != nullptr &&
++                checked_cast<GraphicsPipeline*>(m_CurrentGraphicsState.pipeline)->desc.renderState.rasterState.scissorEnable != pso->desc.renderState.rasterState.scissorEnable) ||
+             arraysAreDifferent(m_CurrentGraphicsState.viewport.viewports, state.viewport.viewports) ||
+             arraysAreDifferent(m_CurrentGraphicsState.viewport.scissorRects, state.viewport.scissorRects);
+ 

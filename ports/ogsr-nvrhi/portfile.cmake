@@ -50,6 +50,8 @@
 #                                    application's residency (a texture it evicted is made resident before a list that uses it runs)
 #   d3d12-root-signature-lock.patch  D3D12: Device::getRootSignature and ~RootSignature use the root signature cache under a lock
 #                                    (pipelines are created from several threads); a cached one being deleted is replaced, not revived
+#   d3d12-viewport-framebuffer.patch  D3D12: setGraphicsState sends the viewports / scissor rects again when the framebuffer or the
+#                                    pipeline's scissorEnable changes (both change the clamped rects convertViewportState makes)
 
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
@@ -81,6 +83,7 @@ vcpkg_from_github(
         d3d12-set-vertex-index-buffers.patch
         d3d12-referenced-textures.patch
         d3d12-root-signature-lock.patch
+        d3d12-viewport-framebuffer.patch
 )
 
 vcpkg_cmake_configure(
