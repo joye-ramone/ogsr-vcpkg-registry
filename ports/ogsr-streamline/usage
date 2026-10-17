@@ -1,0 +1,4 @@
+ogsr-streamline installs headers only (no import library): include them as <streamline/sl.h>, <streamline/sl_dlss_g.h>, ...
+
+Copy the folder bin/streamline (Release: production DLLs) or debug/bin/streamline (Debug: development DLLs) next to the executable and load
+streamline/sl.interposer.dll by path after sl::security::verifyEmbeddedSignature (manual hooking, ProgrammingGuideManualHooking.md).

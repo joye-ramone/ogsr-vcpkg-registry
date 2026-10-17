@@ -1,0 +1,8 @@
+{
+  "name": "ogsr-streamline",
+  "version": "2.14.16",
+  "description": "NVIDIA Streamline headers and the signed runtime DLLs OGSR Engine loads for DLSS Frame Generation, Reflex and PCL (sl.interposer, sl.common, sl.dlss_g, sl.reflex, sl.pcl, nvngx_dlssg), from the SDK release archive of github.com/NVIDIA-RTX/Streamline; production DLLs for Release, development DLLs for Debug.",
+  "homepage": "https://github.com/NVIDIA-RTX/Streamline",
+  "license": null,
+  "supports": "windows & x64 & !uwp"
+}

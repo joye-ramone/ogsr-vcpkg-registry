@@ -16,6 +16,7 @@ Updating a package or adding a new one: `AGENTS.md`.
 | `ogsr-fidelityfx-fsr3` | 2026-10-16 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.2-DX11-Native-API`) |
 | `ogsr-tracy` | 2026-10-03 | https://github.com/wolfpld/tracy (`master` after v0.14.1, 0.14.2 dev, protocol 83) |
 | `ogsr-nvrhi` | 2026-10-05#4 | https://github.com/NVIDIA-RTX/NVRHI (`main`, 22 OGSR patches in the port: D3D11 deferred command lists, native handles, binding cost, D3D12 view cache lock, D3D12 draw cost, textures a D3D12 list uses, D3D12 root signature cache lock, D3D12 viewports on a framebuffer change) |
+| `ogsr-streamline` | 2.14.16 | https://github.com/NVIDIA-RTX/Streamline (SDK release archive `v2.14.16`: headers and the signed DLLs for DLSS Frame Generation, Reflex, PCL; one header fix in the portfile) |
 
 Each port is pinned to one commit of its source; the exact commit is `REF` in `ports/<package>/portfile.cmake`.
 
@@ -51,6 +52,7 @@ Each port is pinned to one commit of its source; the exact commit is `REF` in `p
    - Keep the defines `dSINGLE`, `MSVC` (ODE) and `FFX_GCC` (FidelityFX).
    - Tracy: add `$(SolutionDir)vcpkg_installed\$(VcpkgTriplet)\include\ogsr-tracy` to the include path and compile `...\include\ogsr-tracy\TracyClient.cpp` in one project (xrCore, no precompiled header). See below.
    - Copy the DLSS runtime next to the exe in a post-build step: `$(SolutionDir)vcpkg_installed\$(VcpkgTriplet)\bin\nvngx_dlss.dll` (Release), `...\$(VcpkgTriplet)\debug\bin\nvngx_dlss.dll` (Debug).
+   - Streamline: headers as `<streamline/sl.h>`; copy the folder `...\$(VcpkgTriplet)\bin\streamline` (Release, signed production DLLs) or `...\debug\bin\streamline` (Debug, development DLLs) next to the exe and load `streamline\sl.interposer.dll` by path after its signature check (no import library is installed).
 
 ## Why `ogsr-tracy` is sources only
 
