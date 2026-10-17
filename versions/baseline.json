@@ -22,7 +22,7 @@
     },
     "ogsr-nvrhi": {
       "baseline": "2026-10-05",
-      "port-version": 3
+      "port-version": 4
     },
     "ogsr-ode": {
       "baseline": "2026-10-11",
