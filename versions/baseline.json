@@ -28,6 +28,10 @@
       "baseline": "2026-10-11",
       "port-version": 0
     },
+    "ogsr-streamline": {
+      "baseline": "2.14.16",
+      "port-version": 0
+    },
     "ogsr-tracy": {
       "baseline": "2026-10-03",
       "port-version": 0
