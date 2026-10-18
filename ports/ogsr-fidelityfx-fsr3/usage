@@ -7,4 +7,5 @@ ogsr-fidelityfx-fsr3 provides CMake targets:
 MSBuild (vcpkg manifest mode): define FFX_GCC (static FFX_API); #include <FidelityFX/host/ffx_fsr3.h>, <FidelityFX/host/backends/dx11/ffx_dx11.h>
 or <FidelityFX/host/backends/dx12/ffx_dx12.h>; ffx_fsr3upscaler_x64.lib, ffx_fsr3_x64.lib, ffx_frameinterpolation_x64.lib,
 ffx_opticalflow_x64.lib, ffx_backend_dx11_x64.lib and ffx_backend_dx12_x64.lib are auto-linked (the DX12 backend's shader blob lookups
-have their own names, so both backends link into one exe).
+have their own names, so both backends link into one exe). The DX12 backend calls CreateDXGIFactory2: an MSBuild consumer
+links dxgi.lib itself (winmm / dwmapi come with the SDK's #pragma comment lines).
