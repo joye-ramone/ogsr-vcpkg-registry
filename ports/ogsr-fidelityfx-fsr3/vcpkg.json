@@ -1,7 +1,7 @@
 {
   "name": "ogsr-fidelityfx-fsr3",
   "version-date": "2026-10-18",
-  "port-version": 1,
+  "port-version": 2,
   "description": "AMD FidelityFX SDK fork used by OGSR Engine (OGSR/FidelityFX-SDK, branch release-FSR3-3.1.4-ogsr): upstream SDK 1.1.4 with the FSR 3.1.4 upscaler, FSR3 frame generation (DX12: frame interpolation, optical flow, proxy swap chain) and DX11 (metarutaiga) / DX12 backends as static libraries, with the fork's prebuilt shader blobs.",
   "homepage": "https://github.com/OGSR/FidelityFX-SDK",
   "license": "MIT",

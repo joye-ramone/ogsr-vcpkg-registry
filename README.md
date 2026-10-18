@@ -13,7 +13,7 @@ Updating a package or adding a new one: `AGENTS.md`.
 | `ogsr-libsquashfs` | 2024-03-24 | https://github.com/AgentD/squashfs-tools-ng (`master`) |
 | `ogsr-directxtex` | 2026-08-28 | https://github.com/solbjorn/DirectXTex (`master`) |
 | `ogsr-nvidia-dlss` | 310.9.1#1 | https://github.com/NVIDIA/DLSS (`v310.9.1`) |
-| `ogsr-fidelityfx-fsr3` | 2026-10-18#1 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.4-ogsr`: SDK 1.1.4, FSR 3.1.4, metarutaiga's DX11 backend) |
+| `ogsr-fidelityfx-fsr3` | 2026-10-18#2 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.4-ogsr`: SDK 1.1.4, FSR 3.1.4, metarutaiga's DX11 backend) |
 | `ogsr-tracy` | 2026-10-03 | https://github.com/wolfpld/tracy (`master` after v0.14.1, 0.14.2 dev, protocol 83) |
 | `ogsr-nvrhi` | 2026-10-05#4 | https://github.com/NVIDIA-RTX/NVRHI (`main`, 22 OGSR patches in the port: D3D11 deferred command lists, native handles, binding cost, D3D12 view cache lock, D3D12 draw cost, textures a D3D12 list uses, D3D12 root signature cache lock, D3D12 viewports on a framebuffer change) |
 | `ogsr-streamline` | 2.14.16 | https://github.com/NVIDIA-RTX/Streamline (SDK release archive `v2.14.16`: headers and the signed DLLs for DLSS Frame Generation, Reflex, PCL; one header fix in the portfile) |

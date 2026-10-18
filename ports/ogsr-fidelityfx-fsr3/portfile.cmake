@@ -1,5 +1,6 @@
 # FidelityFX SDK fork of OGSR Engine: upstream SDK 1.1.4 (FSR 3.1.4 upscaler, FSR3 frame generation) + metarutaiga's 1.1.4 DX11 backend
-# (branch release-FSR3-3.1.4-ogsr: FXC fixes for the SM 5.0 shaders, the DX11 shader rules, the DX11 constant ring mapped per upload).
+# (branch release-FSR3-3.1.4-ogsr: FXC fixes for the SM 5.0 shaders, the DX11 shader rules, the DX11 constant ring mapped per upload, the
+# interpolation-only FSR3 context's shared resources).
 # The SDK's own CMake build compiles the shaders with the FidelityFX shader compiler; the fork commits the compiled permutation headers
 # (sdk/build/src/backends/shaders/dx11 and dx12), so the port adds CMakeLists.txt that builds the FSR3 upscaler, ffx_fsr3, frame
 # interpolation, optical flow and the DX11 / DX12 backends (with the frame interpolation proxy swap chain) from sdk/ without the SDK's CMake.
@@ -10,8 +11,8 @@ vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO OGSR/FidelityFX-SDK
-    REF 10b1feb0e9e8fcf4244163bcf0da5678ed6f57c6
-    SHA512 6ae95f5e74f6e53100abf5ff68d161636ac15706455d083777dbf5431295af3a08e9f4c3498f7b923725af002ad035795f9c94c0a76542702a33dbb151f40ed0
+    REF 04808bb239fb196c8d7401b376e039e82e78d2b2
+    SHA512 42b47a24995a32251e35ce57e8e14c49677c1e8ecbebaa136fb2cfa8c5824d1d171a44f57e494fb7b70fdb41a2307e5a005c8bd69dbdb03e30370f5f939bb51a
     HEAD_REF release-FSR3-3.1.4-ogsr
 )
 
