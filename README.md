@@ -17,6 +17,7 @@ Updating a package or adding a new one: `AGENTS.md`.
 | `ogsr-tracy` | 2026-10-03 | https://github.com/wolfpld/tracy (`master` after v0.14.1, 0.14.2 dev, protocol 83) |
 | `ogsr-nvrhi` | 2026-10-05#4 | https://github.com/NVIDIA-RTX/NVRHI (`main`, 22 OGSR patches in the port: D3D11 deferred command lists, native handles, binding cost, D3D12 view cache lock, D3D12 draw cost, textures a D3D12 list uses, D3D12 root signature cache lock, D3D12 viewports on a framebuffer change) |
 | `ogsr-streamline` | 2.14.16 | https://github.com/NVIDIA-RTX/Streamline (SDK release archive `v2.14.16`: headers and the signed DLLs for DLSS Frame Generation, Reflex, PCL; one header fix in the portfile) |
+| `ogsr-imgui` | 1.92.9 | https://github.com/ocornut/imgui (`v1.92.9b-docking`: core + docking + imgui_stdlib, no backends; `imconfig.h` with `IMGUI_ENABLE_TEST_ENGINE` item hooks and `IM_ASSERT` in Release, both defined by the consumer) |
 
 Each port is pinned to one commit of its source; the exact commit is `REF` in `ports/<package>/portfile.cmake`.
 

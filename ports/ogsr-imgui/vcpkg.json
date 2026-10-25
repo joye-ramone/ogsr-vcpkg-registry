@@ -1,0 +1,18 @@
+{
+  "name": "ogsr-imgui",
+  "version": "1.92.9",
+  "description": "Dear ImGui (ocornut/imgui v1.92.9b-docking) for OGSR Engine: static core library with docking and imgui_stdlib, no backends (the engine has its own); imconfig.h turns on IMGUI_ENABLE_TEST_ENGINE (item hooks for the engine's own UI test locator, not the Test Engine library) and routes IM_ASSERT in every configuration to ImGuiOgsr_AssertFailed, which the consumer defines.",
+  "homepage": "https://github.com/ocornut/imgui",
+  "license": "MIT",
+  "supports": "windows & x64 & !uwp & static",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

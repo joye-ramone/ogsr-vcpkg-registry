@@ -1,0 +1,14 @@
+ogsr-imgui provides CMake targets (same names as the main registry's imgui):
+
+    find_package(imgui CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE imgui::imgui)
+
+MSBuild: vcpkg's integration adds include\ and links imgui.lib (Debug imguid.lib).
+
+The consumer must define (once, in one translation unit):
+
+    void ImGuiOgsr_AssertFailed(const char* expr, const char* file, int line);
+    void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb, const ImGuiLastItemData* item_data);
+    void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags flags);
+    void ImGuiTestEngineHook_Log(ImGuiContext* ctx, const char* fmt, ...);
+    const char* ImGuiTestEngine_FindItemDebugLabel(ImGuiContext* ctx, ImGuiID id);
