@@ -8,6 +8,10 @@
       "baseline": "2026-10-18",
       "port-version": 2
     },
+    "ogsr-imgui": {
+      "baseline": "1.92.9",
+      "port-version": 0
+    },
     "ogsr-libsquashfs": {
       "baseline": "2024-03-24",
       "port-version": 0
