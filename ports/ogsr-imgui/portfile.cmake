@@ -1,12 +1,12 @@
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-# Upstream tag is v1.92.9b-docking (a patch of 1.92.9); the letter suffix is not a valid vcpkg version.
-# Same sources as the main registry's imgui 1.92.9 with the docking-experimental feature.
+# Upstream tag v${VERSION}-docking. A patch release with a letter suffix (v1.92.9b-docking) is not a valid vcpkg version:
+# keep the base version and write the letter into REF.
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO ocornut/imgui
-    REF "v${VERSION}b-docking"
-    SHA512 7eddcdb475f1db1fc8242d918533b955c964d2267abe713bdf23f8e2444770946d3c79c7855e360bab6168e36231b95bd05a84106c08f876dcd53daac9caccac
+    REF "v${VERSION}-docking"
+    SHA512 00ade7a3e2c2e34465f1bb9fafd78733d3e659617b0857cf1b3c7f04cfc1d8566d1fd6a8697946f0de7c808cce1c4d0a4b2195c7bc20144cfd8b1e9b1cfba621
     HEAD_REF docking
 )
 

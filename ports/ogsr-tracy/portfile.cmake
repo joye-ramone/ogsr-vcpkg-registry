@@ -11,8 +11,8 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO wolfpld/tracy
-    REF 23755c9fc84680c86a863ea72b845dad26ddaded
-    SHA512 e85cff12e3c0b1d2ce09d835c33e8ec35a823cdd15547b1babcc215cc12bc87e7f1ee557ffd1e649280c14fa110eb5323c033f27da779963502d3a6b56df6de4
+    REF f2a4f2529e7e71844c9e434b877770a21ecf7587 # v0.15.0
+    SHA512 b1c93209f19bc4f6c98606ed5c69447b299917e548f8560526c069c4689b5562a88e68abaf9fcc9fde492c95a0c60a7909c544475ca7b78f2fff63c0dad13f26
     HEAD_REF master
     PATCHES
         unused-variables.patch # [[maybe_unused]] on variables read only by TRACY_ASSERT: the engine builds with /we4189 and NDEBUG

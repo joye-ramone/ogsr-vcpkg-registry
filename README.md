@@ -14,10 +14,10 @@ Updating a package or adding a new one: `AGENTS.md`.
 | `ogsr-directxtex` | 2026-11-16 | https://github.com/microsoft/DirectXTex (`main`, 1 OGSR patch in the port: `LoadFromDDSStream` / `InputStream`, formerly the solbjorn/DirectXTex fork) |
 | `ogsr-nvidia-dlss` | 310.9.1#1 | https://github.com/NVIDIA/DLSS (`v310.9.1`) |
 | `ogsr-fidelityfx-fsr3` | 2026-10-18#2 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.4-ogsr`: SDK 1.1.4, FSR 3.1.4, metarutaiga's DX11 backend) |
-| `ogsr-tracy` | 2026-10-03 | https://github.com/wolfpld/tracy (`master` after v0.14.1, 0.14.2 dev, protocol 83) |
+| `ogsr-tracy` | 2026-11-05 | https://github.com/wolfpld/tracy (`v0.15.0`, protocol 83) |
 | `ogsr-nvrhi` | 2026-10-05#4 | https://github.com/NVIDIA-RTX/NVRHI (`main`, 22 OGSR patches in the port: D3D11 deferred command lists, native handles, binding cost, D3D12 view cache lock, D3D12 draw cost, textures a D3D12 list uses, D3D12 root signature cache lock, D3D12 viewports on a framebuffer change) |
 | `ogsr-streamline` | 2.14.16 | https://github.com/NVIDIA-RTX/Streamline (SDK release archive `v2.14.16`: headers and the signed DLLs for DLSS Frame Generation, Reflex, PCL; one header fix in the portfile) |
-| `ogsr-imgui` | 1.92.9 | https://github.com/ocornut/imgui (`v1.92.9b-docking`: core + docking + imgui_stdlib, no backends; `imconfig.h` with `IMGUI_ENABLE_TEST_ENGINE` item hooks and `IM_ASSERT` in Release, both defined by the consumer) |
+| `ogsr-imgui` | 1.93.0 | https://github.com/ocornut/imgui (`v1.93.0-docking`: core + docking + imgui_stdlib, no backends; `imconfig.h` with `IMGUI_ENABLE_TEST_ENGINE` item hooks and `IM_ASSERT` in Release, both defined by the consumer) |
 
 Each port is pinned to one commit of its source; the exact commit is `REF` in `ports/<package>/portfile.cmake`.
 
@@ -62,7 +62,7 @@ Each port is pinned to one commit of its source; the exact commit is `REF` in `p
 - All Tracy settings are defines (`TRACY_ENABLE`, `TRACY_ON_DEMAND`, `TRACY_NO_FRAME_IMAGE`, `TRACY_DBGHELP_LOCK=OgsrDbgHelp`), and the client and every file that includes `Tracy.hpp` must use the same ones. The engine builds two variants from one `vcpkg_installed`: the normal one and `BUILD_TRACE=1` with Tracy on. Only the engine's own compile of `TracyClient.cpp` follows the variant.
 - Without `TRACY_ENABLE` the client compiles to a few thread-name helpers (`common/TracySystem.cpp`, about 13 KB of object code, no profiler, no thread, no socket) and every Tracy macro is empty. With it, it is the full client (about 900 KB).
 - vcpkg's own `tracy` port builds a library with `TRACY_ENABLE` on, and the vcpkg MSBuild integration links every installed `.lib` into every build: a normal build could then start the profiler from that library's static initializers. Its options also don't cover `TRACY_NO_FRAME_IMAGE` or `TRACY_DBGHELP_LOCK`, and its version (0.13.1 at the engine's vcpkg baseline) doesn't match the viewer.
-- The client must speak the protocol of `tracy-profiler.exe` / `tracy-capture.exe`, so the commit is pinned. Master builds have no release: the matching tools come from the `windows` artifact of upstream CI for that commit (`gh run download <run id> -R wolfpld/tracy -n windows`).
+- The client must speak the protocol of `tracy-profiler.exe` / `tracy-capture.exe`, so the commit is pinned. A release tag has the tools as release binaries; a master commit has none, and the matching tools come from the `windows` artifact of upstream CI for that commit (`gh run download <run id> -R wolfpld/tracy -n windows`).
 - `unused-variables.patch` adds `[[maybe_unused]]` to five variables that only `TRACY_ASSERT` reads. With `NDEBUG` the asserts are empty, and the engine builds with `/we4189`, so Release Tracy builds fail without it.
 
 Private source repos (and this registry, if it is private) need git access without a prompt: Git Credential Manager or an SSH URL.
