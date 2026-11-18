@@ -9,7 +9,7 @@
       "port-version": 2
     },
     "ogsr-imgui": {
-      "baseline": "1.92.9",
+      "baseline": "1.93.0",
       "port-version": 0
     },
     "ogsr-libsquashfs": {
@@ -37,7 +37,7 @@
       "port-version": 0
     },
     "ogsr-tracy": {
-      "baseline": "2026-10-03",
+      "baseline": "2026-11-05",
       "port-version": 0
     }
   }
