@@ -1,0 +1,251 @@
+diff --git a/Auxiliary/DirectXTexEXR.cpp b/Auxiliary/DirectXTexEXR.cpp
+index 2ab883e..4daf6c3 100644
+--- a/Auxiliary/DirectXTexEXR.cpp
++++ b/Auxiliary/DirectXTexEXR.cpp
+@@ -63,10 +63,10 @@ using PackedVector::XMHALF4;
+ 
+ namespace
+ {
+-    class InputStream : public Imf::IStream
++    class EXRInputStream : public Imf::IStream
+     {
+     public:
+-        InputStream(const uint8_t* data, size_t size)
++        EXRInputStream(const uint8_t* data, size_t size)
+             : IStream("InputStream"),
+               m_DataPtr(data),
+               m_DataSize(size),
+@@ -458,7 +458,7 @@ _Use_decl_annotations_ HRESULT DirectX::LoadFromEXRMemory(const uint8_t* pSource
+     if (!pSource || !size)
+         return E_INVALIDARG;
+ 
+-    return LoadFromEXRCommon(InputStream(pSource, size), metadata, image);
++    return LoadFromEXRCommon(EXRInputStream(pSource, size), metadata, image);
+ }
+ 
+ //-------------------------------------------------------------------------------------
+diff --git a/DirectXTex/DirectXTex.h b/DirectXTex/DirectXTex.h
+index 03c0ebf..f507d84 100644
+--- a/DirectXTex/DirectXTex.h
++++ b/DirectXTex/DirectXTex.h
+@@ -614,12 +614,29 @@ namespace DirectX
+     //---------------------------------------------------------------------------------
+     // Image I/O
+ 
++    // OGSR: a source of DDS data the application reads itself (a file inside an archive, a mapped view)
++    class DIRECTX_TEX_API InputStream
++    {
++    public:
++        virtual ~InputStream() = default;
++
++        virtual bool Read(_Out_writes_bytes_(size) void* data, _In_ size_t size) = 0;
++
++        virtual bool Seek(_In_ size_t position) = 0;
++
++        virtual size_t Size() = 0;
++    };
++
+     // DDS operations
+     DIRECTX_TEX_API HRESULT __cdecl LoadFromDDSMemory(_In_reads_bytes_(size) const uint8_t* pSource,
+         _In_ size_t                                                                         size,
+         _In_ DDS_FLAGS                                                                      flags,
+         _Out_opt_ TexMetadata*                                                              metadata,
+         _Out_ ScratchImage&                                                                 image) noexcept;
++    DIRECTX_TEX_API HRESULT __cdecl LoadFromDDSStream(_In_ InputStream& stream,
++        _In_ DDS_FLAGS                                                  flags,
++        _Out_opt_ TexMetadata*                                          metadata,
++        _Out_ ScratchImage&                                             image) noexcept;
+     DIRECTX_TEX_API HRESULT __cdecl LoadFromDDSFile(_In_z_ const wchar_t* szFile,
+         _In_ DDS_FLAGS                                                    flags,
+         _Out_opt_ TexMetadata*                                            metadata,
+@@ -631,6 +648,11 @@ namespace DirectX
+         _Out_opt_ TexMetadata*                                                                metadata,
+         _Out_opt_ DDSMetaData*                                                                ddPixelFormat,
+         _Out_ ScratchImage&                                                                   image) noexcept;
++    DIRECTX_TEX_API HRESULT __cdecl LoadFromDDSStreamEx(_In_ InputStream& stream,
++        _In_ DDS_FLAGS                                                    flags,
++        _Out_opt_ TexMetadata*                                            metadata,
++        _Out_opt_ DDSMetaData*                                            ddPixelFormat,
++        _Out_ ScratchImage&                                               image) noexcept;
+     DIRECTX_TEX_API HRESULT __cdecl LoadFromDDSFileEx(_In_z_ const wchar_t* szFile,
+         _In_ DDS_FLAGS                                                      flags,
+         _Out_opt_ TexMetadata*                                              metadata,
+diff --git a/DirectXTex/DirectXTexDDS.cpp b/DirectXTex/DirectXTexDDS.cpp
+index 08f9c0e..a0f6c29 100644
+--- a/DirectXTex/DirectXTexDDS.cpp
++++ b/DirectXTex/DirectXTexDDS.cpp
+@@ -2072,6 +2072,174 @@ _Use_decl_annotations_ HRESULT DirectX::LoadFromDDSMemoryEx(const uint8_t* pSour
+     return S_OK;
+ }
+ 
++//-------------------------------------------------------------------------------------
++// OGSR: load a DDS file from an application stream (LoadFromDDSFileEx with the reads through InputStream)
++//-------------------------------------------------------------------------------------
++_Use_decl_annotations_ HRESULT
++DirectX::LoadFromDDSStream(InputStream& stream, DDS_FLAGS flags, TexMetadata* metadata, ScratchImage& image) noexcept
++{
++    return LoadFromDDSStreamEx(stream, flags, metadata, nullptr, image);
++}
++
++_Use_decl_annotations_ HRESULT DirectX::LoadFromDDSStreamEx(InputStream& stream,
++    DDS_FLAGS                                                            flags,
++    TexMetadata*                                                         metadata,
++    DDSMetaData*                                                         ddPixelFormat,
++    ScratchImage&                                                        image) noexcept
++{
++    image.Release();
++
++    const size_t len = stream.Size();
++    if (len == 0)
++        return E_FAIL;
++
++    // Too big for 32-bit allocation, so reject read (4 GB should be plenty large enough for a valid DDS file)
++    if (len > UINT32_MAX)
++        return HRESULT_E_FILE_TOO_LARGE;
++
++    // Need at least enough data to fill the standard header and magic number to be a valid DDS
++    if (len < DDS_MIN_HEADER_SIZE)
++        return E_FAIL;
++
++    // Read the header in (including extended header if present)
++    uint8_t header[DDS_DX10_HEADER_SIZE] = {};
++
++    const auto headerLen = std::min<size_t>(len, DDS_DX10_HEADER_SIZE);
++    if (!stream.Read(header, headerLen))
++        return E_FAIL;
++
++    uint32_t    convFlags = 0;
++    TexMetadata mdata;
++    HRESULT     hr = DecodeDDSHeader(header, headerLen, flags, mdata, ddPixelFormat, convFlags);
++    if (FAILED(hr))
++        return hr;
++
++    size_t offset = DDS_DX10_HEADER_SIZE;
++
++    if (!(convFlags & CONV_FLAGS_DX10))
++    {
++        // Must reset the position since we read more than the standard header above
++        if (!stream.Seek(DDS_MIN_HEADER_SIZE))
++            return E_FAIL;
++
++        offset = DDS_MIN_HEADER_SIZE;
++    }
++
++    std::unique_ptr<uint32_t[]> pal8;
++    if (convFlags & CONV_FLAGS_PAL8)
++    {
++        if (len < offset + (256 * sizeof(uint32_t)))
++            return E_FAIL;
++
++        pal8.reset(new (std::nothrow) uint32_t[256]);
++        if (!pal8)
++            return E_OUTOFMEMORY;
++
++        if (!stream.Read(pal8.get(), 256 * sizeof(uint32_t)))
++            return E_FAIL;
++
++        offset += (256 * sizeof(uint32_t));
++    }
++
++    if (len <= offset)
++        return E_FAIL;
++
++    const size_t remaining = len - offset;
++
++    hr = image.Initialize(mdata);
++    if (FAILED(hr))
++        return hr;
++
++    if (flags & DDS_FLAGS_PERMISSIVE)
++    {
++        // For cubemaps, DDS_HEADER_DXT10.arraySize is supposed to be 'number of cubes'.
++        // This handles cases where the value is incorrectly written as the original 6*numCubes value.
++        if ((mdata.miscFlags & TEX_MISC_TEXTURECUBE) && (convFlags & CONV_FLAGS_DX10) && (image.GetPixelsSize() > remaining)
++            && ((mdata.arraySize % 6) == 0))
++        {
++            mdata.arraySize = mdata.arraySize / 6;
++            hr              = image.Initialize(mdata);
++            if (FAILED(hr))
++                return hr;
++
++            if (image.GetPixelsSize() > remaining)
++            {
++                image.Release();
++                return HRESULT_E_HANDLE_EOF;
++            }
++        }
++    }
++
++    if ((convFlags & CONV_FLAGS_EXPAND) || (flags & (DDS_FLAGS_LEGACY_DWORD | DDS_FLAGS_BAD_DXTN_TAILS)))
++    {
++        std::unique_ptr<uint8_t[]> temp(new (std::nothrow) uint8_t[remaining]);
++        if (!temp)
++        {
++            image.Release();
++            return E_OUTOFMEMORY;
++        }
++
++        if (!stream.Read(temp.get(), remaining))
++        {
++            image.Release();
++            return E_FAIL;
++        }
++
++        CP_FLAGS cflags = CP_FLAGS_NONE;
++        if (flags & DDS_FLAGS_LEGACY_DWORD)
++        {
++            cflags |= CP_FLAGS_LEGACY_DWORD;
++        }
++        if (flags & DDS_FLAGS_BAD_DXTN_TAILS)
++        {
++            cflags |= CP_FLAGS_BAD_DXTN_TAILS;
++        }
++
++        hr = CopyImage(temp.get(), remaining, mdata, cflags, convFlags, pal8.get(), image);
++        if (FAILED(hr))
++        {
++            image.Release();
++            return hr;
++        }
++    }
++    else
++    {
++        if (remaining < image.GetPixelsSize())
++        {
++            image.Release();
++            return HRESULT_E_HANDLE_EOF;
++        }
++
++        if (image.GetPixelsSize() > UINT32_MAX)
++        {
++            image.Release();
++            return HRESULT_E_ARITHMETIC_OVERFLOW;
++        }
++
++        if (!stream.Read(image.GetPixels(), image.GetPixelsSize()))
++        {
++            image.Release();
++            return E_FAIL;
++        }
++
++        if (convFlags & (CONV_FLAGS_SWIZZLE | CONV_FLAGS_NOALPHA | CONV_FLAGS_L8U8V8 | CONV_FLAGS_WUV10))
++        {
++            // Swizzle/copy image in place
++            hr = CopyImageInPlace(convFlags, image);
++            if (FAILED(hr))
++            {
++                image.Release();
++                return hr;
++            }
++        }
++    }
++
++    if (metadata)
++        memcpy(metadata, &mdata, sizeof(TexMetadata));
++
++    return S_OK;
++}
++
+ //-------------------------------------------------------------------------------------
+ // Load a DDS file from disk
+ //-------------------------------------------------------------------------------------

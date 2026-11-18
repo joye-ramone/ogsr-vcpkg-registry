@@ -1,15 +1,23 @@
-# DirectXTex fork of OGSR Engine, built with the fork's own CMakeLists.txt. The options give the same library as the engine's former
-# 3rd_party\Src\DirectXTex\DirectXTex.vcxproj: D3D11 helpers and the BC6H/BC7 GPU encoder (shaders compiled with the Windows SDK fxc.exe),
-# no D3D12 (so _WIN32_WINNT=0x0603), no OpenMP (BC6H/BC7 CPU compression single-threaded, no vcomp DLL), /GL in Release.
+# DirectXTex for OGSR Engine: upstream microsoft/DirectXTex built with its own CMakeLists.txt. The options give the same library as the
+# engine's former 3rd_party\Src\DirectXTex\DirectXTex.vcxproj: D3D11 helpers and the BC6H/BC7 GPU encoder (shaders compiled with the
+# Windows SDK fxc.exe), no D3D12 (so _WIN32_WINNT=0x0603), no OpenMP (BC6H/BC7 CPU compression single-threaded, no vcomp DLL), /GL in Release.
+#
+# load-dds-stream.patch (until 2026-11 the solbjorn/DirectXTex fork, branch master): DirectX::InputStream (Read / Seek / Size) and
+# LoadFromDDSStream / LoadFromDDSStreamEx, LoadFromDDSFileEx with every read through the stream; the engine's texture loader reads DDS files
+# from its archives with it (xrRender Resources\TextureLoader.cpp). Also renames DirectXTexEXR.cpp's InputStream to EXRInputStream (it
+# would clash with DirectX::InputStream; EXR support is off here). The fork's non-owning ScratchImage is not carried over: the engine never
+# used it. Updating: the patch is against upstream's clang-formatted sources (2026-09-21, #740); keep it in that style.
 
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
-    REPO solbjorn/DirectXTex
-    REF 60dabb3f2a5aec75d04126a80f280ce75985f483
-    SHA512 38b5786b134bcb5657ed609ca9e6036b88556d47b393a781f27e376d38a2dbaaf2309b736c7b83dd4fa85f5df26ceb679d930781f32c79d57f1f969390fdb4e5
-    HEAD_REF master
+    REPO microsoft/DirectXTex
+    REF 6e88c1c52e977cfd9c30671240f7995cba6d4968
+    SHA512 eead8cee1506ab6ad0e5bc6aef4c30952c5f916b76a3a19d01db2e5a5a5ca18b7c10fa893cb5f5af7345d15fac109ede8e52fd5c84f7641a28021780bf456909
+    HEAD_REF main
+    PATCHES
+        load-dds-stream.patch
 )
 
 vcpkg_cmake_configure(

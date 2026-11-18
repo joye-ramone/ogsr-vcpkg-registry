@@ -9,9 +9,9 @@ Updating a package or adding a new one: `AGENTS.md`.
 | Package | Version | Source |
 |---|---|---|
 | `ogsr-luajit` | 2026-11-18#1 | https://github.com/joye-ramone/luajit2 (`xray`) |
-| `ogsr-ode` | 2026-10-01 | https://github.com/joye-ramone/ode_xray (`xray_v2`) |
+| `ogsr-ode` | 2026-10-11 | https://github.com/joye-ramone/ode_xray (`xray_v2`) |
 | `ogsr-libsquashfs` | 2024-03-24 | https://github.com/AgentD/squashfs-tools-ng (`master`) |
-| `ogsr-directxtex` | 2026-08-28 | https://github.com/solbjorn/DirectXTex (`master`) |
+| `ogsr-directxtex` | 2026-11-16 | https://github.com/microsoft/DirectXTex (`main`, 1 OGSR patch in the port: `LoadFromDDSStream` / `InputStream`, formerly the solbjorn/DirectXTex fork) |
 | `ogsr-nvidia-dlss` | 310.9.1#1 | https://github.com/NVIDIA/DLSS (`v310.9.1`) |
 | `ogsr-fidelityfx-fsr3` | 2026-10-18#2 | https://github.com/OGSR/FidelityFX-SDK (`release-FSR3-3.1.4-ogsr`: SDK 1.1.4, FSR 3.1.4, metarutaiga's DX11 backend) |
 | `ogsr-tracy` | 2026-10-03 | https://github.com/wolfpld/tracy (`master` after v0.14.1, 0.14.2 dev, protocol 83) |

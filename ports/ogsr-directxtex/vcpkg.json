@@ -1,8 +1,8 @@
 {
   "name": "ogsr-directxtex",
-  "version-date": "2026-08-28",
-  "description": "DirectXTex fork used by OGSR Engine (solbjorn/DirectXTex, branch master: LoadFromDDSStream, non-owning ScratchImage): static library with the Direct3D 11 runtime support, no tools, no Direct3D 12, no OpenMP.",
-  "homepage": "https://github.com/solbjorn/DirectXTex",
+  "version-date": "2026-11-16",
+  "description": "DirectXTex (microsoft/DirectXTex main) for OGSR Engine with one patch (LoadFromDDSStream / LoadFromDDSStreamEx and the InputStream interface, formerly the solbjorn/DirectXTex fork): static library with the Direct3D 11 runtime support, no tools, no Direct3D 12, no OpenMP.",
+  "homepage": "https://github.com/microsoft/DirectXTex",
   "license": "MIT",
   "supports": "windows & x64 & !uwp & static",
   "dependencies": [
