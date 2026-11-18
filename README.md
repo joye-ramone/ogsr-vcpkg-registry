@@ -9,7 +9,7 @@ Updating a package or adding a new one: `AGENTS.md`.
 | Package | Version | Source |
 |---|---|---|
 | `ogsr-luajit` | 2026-11-18#2 | https://github.com/joye-ramone/luajit2 (`xray`, openresty `v2.1-agentzh` merged 2026-11-18) |
-| `ogsr-ode` | 2026-10-11 | https://github.com/joye-ramone/ode_xray (`xray_v2`) |
+| `ogsr-ode` | 2026-11-18 | https://github.com/joye-ramone/ode_xray (`xray_v2`) |
 | `ogsr-libsquashfs` | 2024-03-24 | https://github.com/AgentD/squashfs-tools-ng (`master`) |
 | `ogsr-directxtex` | 2026-11-16 | https://github.com/microsoft/DirectXTex (`main`, 1 OGSR patch in the port: `LoadFromDDSStream` / `InputStream`, formerly the solbjorn/DirectXTex fork) |
 | `ogsr-nvidia-dlss` | 310.9.1#1 | https://github.com/NVIDIA/DLSS (`v310.9.1`) |
