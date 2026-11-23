@@ -1,0 +1,7 @@
+ogsr-moc provides CMake targets:
+
+    find_package(ogsr-moc CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE ogsr::moc)
+
+MSBuild (vcpkg manifest mode): #include <MaskedOcclusionCulling.h>; MaskedOcclusionCulling.lib is auto-linked.
+MaskedOcclusionCulling::Create() picks AVX2 or SSE4.1 at run time; GetImplementation() says which.
