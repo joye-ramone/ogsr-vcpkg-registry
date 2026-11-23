@@ -18,7 +18,7 @@
     },
     "ogsr-luajit": {
       "baseline": "2026-11-18",
-      "port-version": 2
+      "port-version": 3
     },
     "ogsr-moc": {
       "baseline": "2026-09-07",
