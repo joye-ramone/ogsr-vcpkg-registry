@@ -23,9 +23,9 @@
 @setlocal
 @rem Add more debug flags here, e.g. DEBUGCFLAGS=/DLUA_USE_ASSERT
 @set DEBUGCFLAGS=/Z7 /Od
-@set LJCOMPILE=cl /nologo /MP /c /O2 /W3 /D_CRT_SECURE_NO_DEPRECATE %LJ_CRT% /D_CRT_STDIO_INLINE=__declspec(dllexport)__inline
-@set LJDYNBUILD=/DLUA_BUILD_AS_DLL /MD
-@set LJDYNBUILD_DEBUG=/DLUA_BUILD_AS_DLL /MDd
+@set LJCOMPILE=cl /nologo /MP /c /O2 /W3 /D_CRT_SECURE_NO_DEPRECATE %LJ_CRT%
+@set LJDYNBUILD=/DLUA_BUILD_AS_DLL /MD /D_CRT_STDIO_INLINE=__declspec(dllexport)__inline
+@set LJDYNBUILD_DEBUG=/DLUA_BUILD_AS_DLL /MDd /D_CRT_STDIO_INLINE=__declspec(dllexport)__inline
 @set LJCOMPILETARGET=/Z7 /Oi /Ot /GL /Gm- /Gy /Ob3
 @set LJLINKTYPE=/DEBUG /RELEASE
 @set LJLINKTYPE_DEBUG=/DEBUG

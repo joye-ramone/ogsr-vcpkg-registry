@@ -1,7 +1,7 @@
 {
   "name": "ogsr-luajit",
   "version-date": "2026-11-18",
-  "port-version": 2,
+  "port-version": 3,
   "description": "LuaJIT fork used by OGSR Engine (joye-ramone/luajit2, branch xray): static library built with the fork's msvcbuild.bat (AVX2, /fp:fast, LTCG in Release).",
   "homepage": "https://github.com/joye-ramone/luajit2",
   "license": "MIT",
