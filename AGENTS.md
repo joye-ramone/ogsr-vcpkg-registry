@@ -32,7 +32,7 @@ versions/o-/<port>.json  every published version -> the git tree of ports/<port>
 |---|---|---|
 | Upstream CMake, options only | `ogsr-directxtex` | the source has a usable CMake build |
 | Own `CMakeLists.txt` copied into the source | `ogsr-ode`, `ogsr-libsquashfs`, `ogsr-fidelityfx-fsr3` | no CMake upstream, or only a small part is needed; list the sources explicitly (the engine's former vcxproj is the reference) |
-| Upstream build script | `ogsr-luajit` (`msvcbuild.bat`, run per configuration in its own copy of the source) | the build generates code (LuaJIT's buildvm) |
+| Own `CMakeLists.txt` that runs generators | `ogsr-luajit` (host tools `minilua` / `buildvm` as executables, DynASM / genversion / buildvm outputs as `add_custom_command`, `lj_vm.obj` as an external object of the library) | the upstream build generates code (LuaJIT's `msvcbuild.bat`); a CMake build follows the triplet's compiler and flags, a batch file hard-codes them |
 | Prebuilt files, each downloaded by itself | `ogsr-nvidia-dlss` (`vcpkg_download_distfile` from `raw.githubusercontent.com/<repo>/<commit>/<path>`) | binaries in a huge repo: only the needed files |
 | Sources only, nothing built | `ogsr-tracy` (installs `public/` to `include\ogsr-tracy`) | the consumer must compile the code with its own defines (see README "Why `ogsr-tracy` is sources only") |
 | Patch on top of upstream | `ogsr-tracy/unused-variables.patch` (`PATCHES` of `vcpkg_from_github`) | a small fix that upstream doesn't have; prefer pushing it to a fork |
@@ -42,7 +42,7 @@ versions/o-/<port>.json  every published version -> the git tree of ports/<port>
 1. Find the new source commit: `git ls-remote <repo-url> refs/heads/<branch>` (or `refs/tags/<tag>^{}` for a tag).
 2. In `ports/<port>/portfile.cmake` set `REF` to it and `SHA512` to `0`. In `vcpkg.json` set `version-date` (or `version`) and remove `port-version` (back to 0).
 3. Test the port as an overlay from a scratch folder outside the engine (section 6). The first run fails on the hash and prints the real `SHA512`: put it in the portfile and run again. For `ogsr-nvidia-dlss`, every listed file has its own hash (set them all to `0`, one install prints them one by one) and the header list may change between releases.
-4. Read the port's comments for what can break: `ogsr-fidelityfx-fsr3` copies the prebuilt shader headers to a short folder; `ogsr-tracy` must match the viewer's protocol (`tracy-capture.exe` in the game's `bin_x64`) and its patch must still apply; `ogsr-luajit`'s `msvcbuild.bat` is the engine's copy, compare it with the fork's after big upstream merges.
+4. Read the port's comments for what can break: `ogsr-fidelityfx-fsr3` copies the prebuilt shader headers to a short folder; `ogsr-tracy` must match the viewer's protocol (`tracy-capture.exe` in the game's `bin_x64`) and its patch must still apply; `ogsr-luajit`'s `CMakeLists.txt` reproduces the fork's `src\msvcbuild.bat` (x64, static): after big upstream merges compare the batch file's steps, DynASM flags, `ALL_LIB` list and compile flags with it.
 5. Commit the port (section 5), record the version, commit again, push.
 6. In the engine: move `baseline` in `vcpkg-configuration.json` to the new registry commit, build Release, run the tests of that library, and record it in `agent/engine_PLAN_vcpkg.md`.
 

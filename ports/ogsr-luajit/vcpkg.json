@@ -1,8 +1,15 @@
 {
   "name": "ogsr-luajit",
   "version-date": "2026-11-25",
-  "description": "LuaJIT fork used by OGSR Engine (joye-ramone/luajit2, branch xray): static library built with the fork's msvcbuild.bat (AVX2, /fp:fast, LTCG in Release).",
+  "port-version": 1,
+  "description": "LuaJIT fork used by OGSR Engine (joye-ramone/luajit2, branch xray): static library built by the port's CMakeLists.txt with the steps and flags of the fork's msvcbuild.bat (AVX2, /fp:fast, LTCG in Release unless OGSR_LUAJIT_LTCG=OFF).",
   "homepage": "https://github.com/joye-ramone/luajit2",
   "license": "MIT",
-  "supports": "windows & x64 & !uwp & static"
+  "supports": "windows & x64 & !uwp & static",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    }
+  ]
 }
